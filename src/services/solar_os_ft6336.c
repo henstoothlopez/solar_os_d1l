@@ -15,6 +15,8 @@ typedef struct {
     char name[SOLAR_OS_EXPANSION_DEVICE_NAME_MAX];
     char i2c_bus[SOLAR_OS_EXPANSION_TARGET_MAX];
     uint8_t address;
+    uint8_t address_fallback; /* NEW 2026-09-01: 0 = no fallback (unchanged
+                                  behavior for boards that don't set it) */
     int reset_pin;
     int irq_pin;
     uint8_t rotation;
@@ -35,15 +37,41 @@ static esp_err_t parse_bindings(const solar_os_expansion_binding_t *bindings,
 {
     bool have_i2c = false;
     bool have_address = false;
-    bool have_reset = false;
+    bool have_address_fallback = false; /* NEW, optional */
+    bool have_reset = false;            /* NEW: no longer required */
     bool have_irq = false;
     bool have_rotation = false;
 
     if (bindings == NULL || device == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    device->reset_pin = -1;
-    device->irq_pin = -1;
+    device->reset_pin = -1; /* NEW default: "no local reset pin" instead of
+                                an unconditional requirement. A board whose
+                                touch reset is gated through an IO expander
+                                (e.g. D1L's TCA9535) omits the "reset"
+                                binding entirely and handles the reset
+                                pulse itself before attach — see the D1L
+                                board manifest's touch0 device comment. */
+    device->irq_pin = -1; /* NEW 2026-09-13: -1 means "no interrupt line
+                              wired" — irq is now optional, matching the
+                              reset_pin pattern above. Confirmed safe two
+                              ways: (1) the Launcher port's proven, working
+                              touch implementation on this same D1L
+                              hardware polls the FT6336U's registers
+                              directly every cycle and never uses an
+                              interrupt line at all — no board note ever
+                              identified a real touch IRQ GPIO across the
+                              pinout schematic, the official Seeed BSP
+                              cross-reference, or the Hackster article; (2)
+                              ft6336_read() below never dereferences
+                              irq_pin for anything — ft6336_init() only
+                              ever configures it as a GPIO input, it's
+                              never actually polled or attached to an ISR.
+                              A board that omits "irq" entirely (like D1L)
+                              loses nothing functional. Boards that do bind
+                              "irq" keep their existing configured-input
+                              behavior unchanged. */
+    device->address_fallback = 0;
 
     for (size_t i = 0; i < binding_count; i++) {
         const solar_os_expansion_binding_t *binding = &bindings[i];
@@ -58,11 +86,32 @@ static esp_err_t parse_bindings(const solar_os_expansion_binding_t *bindings,
             have_i2c = true;
             break;
         case SOLAR_OS_EXPANSION_BINDING_I2C_ADDRESS:
-            if (have_address || binding->value != FT6336_ADDRESS) {
-                return ESP_ERR_INVALID_ARG;
+            /* CORRECTED 2026-09-13, real compiler error:
+             * 'solar_os_expansion_binding_t' has no member named 'key'.
+             * The earlier comment here was wrong — .key only exists on
+             * solar_os_expansion_binding_spec_t (the compile-time
+             * declaration of what a driver accepts), not on the runtime
+             * solar_os_expansion_binding_t passed into attach(). The
+             * runtime struct only carries .role forward. Fixed by adding
+             * an explicit .role = "addr" / .role = "addr_fallback" to
+             * both specs in solar_os_ft6336_driver.c and
+             * solar_os_ft6336_d1l.c (neither had .role set before), and
+             * switching this check to binding->role, matching the exact
+             * pattern the GPIO/PARAMETER cases below already use
+             * successfully in this same function. */
+            if (strcmp(binding->role, "addr_fallback") == 0) {
+                if (have_address_fallback) {
+                    return ESP_ERR_INVALID_ARG;
+                }
+                device->address_fallback = (uint8_t)binding->value;
+                have_address_fallback = true;
+            } else {
+                if (have_address) {
+                    return ESP_ERR_INVALID_ARG;
+                }
+                device->address = (uint8_t)binding->value;
+                have_address = true;
             }
-            device->address = (uint8_t)binding->value;
-            have_address = true;
             break;
         case SOLAR_OS_EXPANSION_BINDING_GPIO:
             if (strcmp(binding->role, "reset") == 0 && !have_reset) {
@@ -88,7 +137,10 @@ static esp_err_t parse_bindings(const solar_os_expansion_binding_t *bindings,
         }
     }
 
-    return have_i2c && have_address && have_reset && have_irq && have_rotation
+    /* "reset" is now OPTIONAL (removed from this requirement — see
+     * solar_os_ft6336_driver.c's binding_specs, required=false). Every
+     * other binding keeps the same requirement as before. */
+    return have_i2c && have_address && have_rotation
         ? ESP_OK
         : ESP_ERR_INVALID_ARG;
 }
@@ -126,6 +178,7 @@ esp_err_t solar_os_ft6336_attach(const char *name,
     candidate.target_height = target.height;
     ESP_RETURN_ON_ERROR(ft6336_init(candidate.i2c_bus,
                                     candidate.address,
+                                    candidate.address_fallback,
                                     candidate.reset_pin,
                                     candidate.irq_pin),
                         TAG,

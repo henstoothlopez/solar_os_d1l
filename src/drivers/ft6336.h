@@ -15,8 +15,10 @@ typedef struct {
 } ft6336_sample_t;
 
 esp_err_t ft6336_init(const char *i2c_bus,
-                      uint8_t address,
-                      int reset_pin,
-                      int irq_pin);
+                          uint8_t address,
+                          uint8_t address_fallback,
+                          int reset_pin,
+                          int irq_pin);
+
 esp_err_t ft6336_read(ft6336_sample_t *sample);
 void ft6336_deinit(void);

@@ -1,0 +1,188 @@
+schema = 1
+
+# SenseCAP Indicator D1L — SolarOS board manifest
+# Scope: FIRST BUILD TARGET ONLY (display + touch + button + shell).
+# No SD, no keyboard bridge, no WiFi/net in this manifest yet — see
+# SolarOS-D1L-Port-Roadmap_2026-08-31.md section 6 for the deferred phase.
+#
+# Pin values below are carried over from the Launcher port on this same
+# board (CLAUDE-HANDOFF-SenseCAP-D1L-Port.md section 1), independently
+# cross-verified 3+ times including against Seeed's own official BSP.
+# The one NEW thing in this file is the st7701-rgb display driver entry —
+# everything else reuses already-proven D1L facts.
+
+[board]
+id = "sensecap_d1l"
+name = "SenseCAP Indicator D1L"
+vendor = "Seeed Studio"
+module = "ESP32-S3"
+
+[target]
+mcu = "esp32s3"
+platformio_board = "sensecap_d1l"
+
+[build]
+drivers = [
+  "cdc_usb_serial_jtag",
+  "uart_esp_idf",
+  "display_st7701_rgb",
+  "i2c_esp_idf",
+  "gpio_esp_idf",
+  "pwm_esp_idf",
+  "pointer_ft6336_d1l",
+]
+capabilities = [
+  "psram", "simd", "display", "gfx", "display_brightness", "pointer",
+  "cdc", "uart", "i2c", "gpio", "expansion_gpio", "pwm", "expansion_uart",
+  "expansion_i2c", "key",
+]
+required_packages = []
+# TODO verify against actual flashed module — carried over as a placeholder
+# from the Launcher port's board JSON, which itself used esp32-s3-devkitc-1
+# as a stand-in. Confirm PSRAM size before first build.
+psram_bytes = 8388608
+
+[defines]
+SOLAR_OS_BOARD_DISPLAY_CONTROLLER = '"ST7701S"'
+SOLAR_OS_BOARD_DISPLAY_DRIVER_NAME = '"st7701_rgb"'
+SOLAR_OS_BOARD_DISPLAY_WIDTH = "480"
+SOLAR_OS_BOARD_DISPLAY_HEIGHT = "480"
+SOLAR_OS_BOARD_DISPLAY_ROTATION = "2"
+# RGB-parallel data pins
+SOLAR_OS_BOARD_PIN_LCD_R0 = "GPIO_NUM_4"
+SOLAR_OS_BOARD_PIN_LCD_R1 = "GPIO_NUM_3"
+SOLAR_OS_BOARD_PIN_LCD_R2 = "GPIO_NUM_2"
+SOLAR_OS_BOARD_PIN_LCD_R3 = "GPIO_NUM_1"
+SOLAR_OS_BOARD_PIN_LCD_R4 = "GPIO_NUM_0"
+SOLAR_OS_BOARD_PIN_LCD_G0 = "GPIO_NUM_10"
+SOLAR_OS_BOARD_PIN_LCD_G1 = "GPIO_NUM_9"
+SOLAR_OS_BOARD_PIN_LCD_G2 = "GPIO_NUM_8"
+SOLAR_OS_BOARD_PIN_LCD_G3 = "GPIO_NUM_7"
+SOLAR_OS_BOARD_PIN_LCD_G4 = "GPIO_NUM_6"
+SOLAR_OS_BOARD_PIN_LCD_G5 = "GPIO_NUM_5"
+SOLAR_OS_BOARD_PIN_LCD_B0 = "GPIO_NUM_15"
+SOLAR_OS_BOARD_PIN_LCD_B1 = "GPIO_NUM_14"
+SOLAR_OS_BOARD_PIN_LCD_B2 = "GPIO_NUM_13"
+SOLAR_OS_BOARD_PIN_LCD_B3 = "GPIO_NUM_12"
+SOLAR_OS_BOARD_PIN_LCD_B4 = "GPIO_NUM_11"
+SOLAR_OS_BOARD_PIN_LCD_HSYNC = "GPIO_NUM_16"
+SOLAR_OS_BOARD_PIN_LCD_VSYNC = "GPIO_NUM_17"
+SOLAR_OS_BOARD_PIN_LCD_DE = "GPIO_NUM_18"
+SOLAR_OS_BOARD_PIN_LCD_PCLK = "GPIO_NUM_21"
+SOLAR_OS_BOARD_PIN_LCD_BL = "GPIO_NUM_45"
+SOLAR_OS_BOARD_LCD_BACKLIGHT_ACTIVE_LEVEL = "1"
+SOLAR_OS_BOARD_LCD_BACKLIGHT_PWM = "1"
+# Timing porches — validated on real D1L hardware via the Launcher port,
+# confirmed against 3 independent sources. Do not re-derive.
+SOLAR_OS_BOARD_LCD_HSYNC_BACK_PORCH = "50"
+SOLAR_OS_BOARD_LCD_HSYNC_FRONT_PORCH = "10"
+SOLAR_OS_BOARD_LCD_HSYNC_PULSE_WIDTH = "8"
+SOLAR_OS_BOARD_LCD_VSYNC_BACK_PORCH = "20"
+SOLAR_OS_BOARD_LCD_VSYNC_FRONT_PORCH = "10"
+SOLAR_OS_BOARD_LCD_VSYNC_PULSE_WIDTH = "8"
+# I2C: touch (FT6336U, dual-probe 0x38/0x48) + TCA9535 IO expander
+SOLAR_OS_BOARD_I2C_PORT = "I2C_NUM_0"
+SOLAR_OS_BOARD_PIN_I2C_SDA = "GPIO_NUM_39"
+SOLAR_OS_BOARD_PIN_I2C_SCL = "GPIO_NUM_40"
+# UART to RP2040 co-processor — shares pins with USB-CDC debug per the
+# Launcher port's flagged (still unconfirmed in practice) risk B.
+SOLAR_OS_BOARD_UART_PORT = "UART_NUM_0"
+SOLAR_OS_BOARD_PIN_UART_TX = "GPIO_NUM_43"
+SOLAR_OS_BOARD_PIN_UART_RX = "GPIO_NUM_44"
+# User button
+SOLAR_OS_BOARD_PIN_KEY = "GPIO_NUM_38"
+SOLAR_OS_BOARD_KEY_ACTIVE_LEVEL = "0"
+SOLAR_OS_BOARD_KEY_PULL_UP = "1"
+SOLAR_OS_BOARD_KEY_PULL_DOWN = "0"
+# TCA9535 IO expander (dual address probe implemented in driver)
+SOLAR_OS_BOARD_TCA9535_PRIMARY_ADDR = "0x20"
+SOLAR_OS_BOARD_TCA9535_FALLBACK_ADDR = "0x39"
+SOLAR_OS_BOARD_TCA9535_PIN_LCD_CS = "4"
+SOLAR_OS_BOARD_TCA9535_PIN_LCD_RST = "5"
+SOLAR_OS_BOARD_TCA9535_PIN_TOUCH_RST = "7"
+SOLAR_OS_BOARD_TCA9535_PIN_RP2040_RST = "8"
+
+[runtime]
+spi_hosts = []
+uart_ports = ["UART_NUM_1", "UART_NUM_2"]
+i2s_ports = []
+
+[[buses]]
+name = "i2c0"
+protocol = "i2c"
+sharing = "shared"
+port = "I2C_NUM_0"
+sda = 39
+scl = 40
+speed_hz = "SOLAR_OS_BUS_I2C_DEFAULT_SPEED_HZ"
+
+[[buses]]
+name = "uart0"
+protocol = "uart"
+sharing = "exclusive"
+port = "UART_NUM_0"
+tx = 43
+rx = 44
+baud_rate = "SOLAR_OS_BUS_UART_DEFAULT_BAUD_RATE"
+
+[[devices]]
+driver = "st7701-rgb"
+name = "display0"
+bindings = { hsync = 16, vsync = 17, de = 18, pclk = 21, bl = 45, active = 1, pwm = 1 }
+
+# RESOLVED 2026-09-02: touch reset (TCA9535 pin 7, TOUCH_RST) is handled
+# by src/services/solar_os_ft6336_d1l.c's attach wrapper — it pulses the
+# expander directly via d1l_expander_pulse() before forwarding to the
+# real, unmodified generic ft6336 attach. No "reset" binding here by
+# design (see solar_os_ft6336_d1l_2026-09-02.c). Sequencing is safe
+# regardless of attach order relative to display0: d1l_expander.c
+# lazily self-initializes the TCA9535 on first use from either path.
+[[devices]]
+driver = "ft6336-d1l"
+name = "touch0"
+bindings = { i2c = "i2c0", addr = 0x48, addr_fallback = 0x38, rotation = 2 }
+
+[[pins]]
+gpio = 16
+policy = "fixed"
+role = "LCD HSYNC"
+[[pins]]
+gpio = 17
+policy = "fixed"
+role = "LCD VSYNC"
+[[pins]]
+gpio = 18
+policy = "fixed"
+role = "LCD DE"
+[[pins]]
+gpio = 21
+policy = "fixed"
+role = "LCD PCLK"
+[[pins]]
+gpio = 38
+policy = "fixed"
+role = "KEY"
+[[pins]]
+gpio = 39
+policy = "fixed"
+role = "I2C SDA"
+[[pins]]
+gpio = 40
+policy = "fixed"
+role = "I2C SCL"
+[[pins]]
+gpio = 42
+policy = "fixed"
+role = "TCA9535 INT (unused)"
+[[pins]]
+gpio = 43
+policy = "releasable"
+role = "UART TX (RP2040 link)"
+[[pins]]
+gpio = 44
+policy = "releasable"
+role = "UART RX (RP2040 link)"
+[[pins]]
+gpio = 45
+policy = "fixed"
+role = "LCD backlight PWM"

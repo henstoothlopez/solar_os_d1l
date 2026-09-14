@@ -1625,3 +1625,62 @@ sources = [
 ]
 capabilities = ["psram"]
 any_capabilities = ["expansion_spi", "expansion_gpio", "expansion_uart"]
+# --- Appended for SenseCAP Indicator D1L port, 2026-09-02 ---
+#
+# WHY THIS FILE EXISTS: found this session, the real mechanism. Adding an
+# entry to boards/expansion_drivers.toml alone is NOT enough for a new
+# driver to actually build — that file is board-manifest-time validation
+# only. The actual list of C source files compiled, and the actual C
+# symbol names registered into SOLAR_OS_EXPANSION_DRIVER_SYMBOLS (which
+# main.c/solar_os_expansion.c iterate at runtime), come from THIS file,
+# via scripts/generate_flavor_config.py. Confirmed by reading the real
+# [packages.driver_display_ili9341] and [packages.driver_ft6336] entries
+# already in this file and matching their exact shape.
+
+[groups.st7701_rgb]
+label = "ST7701S RGB-parallel display (D1L)"
+category = "Expansion hardware"
+members = ["driver_display_st7701_rgb"]
+
+[groups.ft6336_d1l]
+label = "FT6336 touch, TCA9535-gated reset (D1L)"
+category = "Expansion hardware"
+members = ["driver_ft6336_d1l"]
+
+# Shared TCA9535 + D1L expander-pulse helper. Not a manifest-selectable
+# "board driver" itself — pulled in transitively by both packages below
+# via `depends`. See d1l_expander_2026-09-02.c's header comment for why
+# TCA9535 isn't registered as its own expansion device.
+[packages.driver_d1l_expander]
+label = "driver.d1l-expander"
+targets = ["esp32s3"]
+depends = ["service_i2c"]
+sources = [
+  "drivers/tca9535.c",
+  "drivers/d1l_expander.c",
+]
+requires = ["esp_driver_i2c"]
+
+[packages.driver_display_st7701_rgb]
+label = "driver.display-st7701-rgb"
+targets = ["esp32s3"]
+expansion_drivers = ["solar_os_st7701_expansion_driver"]
+depends = ["service_expansion", "service_pwm", "driver_d1l_expander"]
+sources = [
+  "board/solar_os_board_display_expansion.c",
+  "drivers/rgb_st7701.c",
+  "services/solar_os_st7701_display.c",
+]
+requires = ["esp_driver_gpio", "esp_driver_ledc", "esp_lcd", "u8g2"]
+capabilities = ["gfx", "expansion_gpio"]
+
+[packages.driver_ft6336_d1l]
+label = "driver.ft6336-d1l"
+targets = ["esp32s3"]
+expansion_drivers = ["solar_os_ft6336_d1l_expansion_driver"]
+depends = ["service_expansion", "driver_ft6336", "driver_d1l_expander"]
+sources = [
+  "services/solar_os_ft6336_d1l.c",
+]
+requires = ["esp_driver_gpio"]
+capabilities = ["gfx", "expansion_gpio"]

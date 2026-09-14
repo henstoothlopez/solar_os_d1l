@@ -437,7 +437,7 @@ required = true
 key = "irq"
 kind = "gpio"
 hint = "gpio"
-required = true
+required = false
 [[drivers.ft6336.bindings]]
 key = "rotation"
 kind = "parameter"
@@ -827,3 +827,115 @@ hint = "gpio"
 key = "reset"
 kind = "gpio"
 hint = "gpio"
+# --- Appended for SenseCAP Indicator D1L port, 2026-09-02 ---
+#
+# CORRECTED 2026-09-02: an earlier version of this patch (2026-08-31)
+# registered TCA9535 as its own standalone expansion device ("expander0"),
+# early=true, requiring careful manifest [[devices]] ordering so it
+# attached before display0. That's been replaced by a simpler, more
+# robust design: src/drivers/d1l_expander.c lazily self-initializes the
+# TCA9535 on first use, called directly by whichever of display or touch
+# attaches first (see solar_os_st7701_display.c and
+# solar_os_ft6336_d1l.c). No manifest device entry, no ordering
+# dependency, no early=true bookkeeping needed for the expander at all.
+# tca9535.c/.h are still real, still used — just not registered as a
+# generic expansion device anymore. Don't reintroduce the standalone
+# [drivers.tca9535] entry; it's redundant with this simpler design.
+
+# DRAFT — needs a schema decision before this is load-bearing.
+# Every other display driver in this catalog expresses its wiring as a
+# handful of "bindings" (spi bus + cs/dc/reset, or i2c bus + addr). An
+# RGB-parallel/DPI panel has ~18 fixed data-line GPIOs (R0-4/G0-5/B0-4)
+# plus hsync/vsync/de/pclk — there's no existing binding "kind" that
+# cleanly expresses a parallel data bus of that width. For the D1L
+# manifest the RGB data pins are set directly as board-level
+# SOLAR_OS_BOARD_PIN_LCD_* defines instead of catalog bindings, and only
+# the handful of genuinely per-instance values (hsync/vsync/de/pclk/
+# backlight) are modeled as bindings here. Decide later whether that's
+# good enough long-term or whether the binding schema needs a new
+# "gpio_bus" kind (a named list of N sequential pins) so a future second
+# RGB-parallel board doesn't have to repeat this same workaround.
+[drivers.st7701-rgb]
+summary = "480x480 RGB-parallel color LCD (DPI)"
+package = "driver_display_st7701_rgb"
+targets = ["esp32s3"]
+capabilities = ["gfx", "expansion_gpio"]
+board_capabilities = ["display", "gfx", "display_brightness"]
+board_driver = "display_st7701_rgb"
+board_defines = { SOLAR_OS_BOARD_DISPLAY_CONTROLLER = '"ST7701S"', SOLAR_OS_BOARD_DISPLAY_WIDTH = "480", SOLAR_OS_BOARD_DISPLAY_HEIGHT = "480" }
+early = true
+default_name = "display0"
+[[drivers.st7701-rgb.bindings]]
+key = "hsync"
+kind = "gpio"
+hint = "gpio"
+required = true
+[[drivers.st7701-rgb.bindings]]
+key = "vsync"
+kind = "gpio"
+hint = "gpio"
+required = true
+[[drivers.st7701-rgb.bindings]]
+key = "de"
+kind = "gpio"
+hint = "gpio"
+required = true
+[[drivers.st7701-rgb.bindings]]
+key = "pclk"
+kind = "gpio"
+hint = "gpio"
+required = true
+[[drivers.st7701-rgb.bindings]]
+key = "bl"
+kind = "gpio"
+hint = "gpio"
+[[drivers.st7701-rgb.bindings]]
+key = "active"
+kind = "parameter"
+hint = "0|1"
+allowed = [0, 1]
+[[drivers.st7701-rgb.bindings]]
+key = "pwm"
+kind = "parameter"
+hint = "0|1"
+allowed = [0, 1]
+
+# NEW 2026-09-02: D1L-specific touch wrapper — pulses TOUCH_RST via the
+# TCA9535 expander before forwarding to the real, unmodified generic
+# "ft6336" attach. See solar_os_ft6336_d1l.c. Binding shape is identical
+# to [drivers.ft6336] above MINUS "reset" (handled internally, not a
+# binding here).
+[drivers.ft6336-d1l]
+summary = "capacitive touch (D1L, TCA9535-gated reset)"
+package = "driver_ft6336_d1l"
+targets = ["esp32s3"]
+capabilities = ["expansion_i2c", "expansion_gpio", "gfx"]
+board_capabilities = ["pointer"]
+board_driver = "pointer_ft6336_d1l"
+default_name = "touch0"
+[[drivers.ft6336-d1l.bindings]]
+key = "i2c"
+kind = "i2c_bus"
+hint = "bus"
+required = true
+[[drivers.ft6336-d1l.bindings]]
+key = "addr"
+kind = "i2c_address"
+hint = "0x48"
+required = true
+allowed = [0x38, 0x48]
+[[drivers.ft6336-d1l.bindings]]
+key = "addr_fallback"
+kind = "i2c_address"
+hint = "0x38"
+allowed = [0x38, 0x48]
+[[drivers.ft6336-d1l.bindings]]
+key = "irq"
+kind = "gpio"
+hint = "gpio"
+required = false
+[[drivers.ft6336-d1l.bindings]]
+key = "rotation"
+kind = "parameter"
+hint = "0..3"
+allowed = [0, 1, 2, 3]
