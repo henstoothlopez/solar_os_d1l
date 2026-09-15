@@ -18,6 +18,7 @@
 #include "solar_os_audio.h"
 #include "solar_os_battery.h"
 #include "solar_os_ble_keyboard.h"
+#include "solar_os_ble.h"
 #include "solar_os_board_caps.h"
 #include "solar_os_buses.h"
 #include "solar_os_config.h"
@@ -604,6 +605,16 @@ static void battery_print_status(solar_os_shell_io_t *term)
     solar_os_shell_io_printf(term,
                              "Power: %s\n",
                              status.external_power ? "external" : "battery");
+    if (status.charging_known) {
+        solar_os_shell_io_printf(term,
+                                 "Charging: %s\n",
+                                 status.charging ? "yes" : "no");
+    } else {
+        solar_os_shell_io_writeln(term,
+                                  status.charging ?
+                                      "Charging: yes (estimated)" :
+                                      "Charging: unknown");
+    }
     battery_print_config(term);
     battery_print_monitor_status(term);
 }
@@ -939,7 +950,9 @@ static void ble_set_scan_indicator(solar_os_shell_io_t *term, bool scanning)
 
     solar_os_status_bar_t status;
     solar_os_terminal_get_status_bar(display, &status);
-    status.keyboard_scanning = scanning;
+    status.bluetooth_supported = true;
+    status.bluetooth_enabled = solar_os_ble_keyboard_enabled_for_current_boot();
+    status.bluetooth_scanning = scanning;
     const size_t keyboard_count = solar_os_input_keyboard_count();
     status.keyboard_count = keyboard_count > UINT8_MAX ? UINT8_MAX : (uint8_t)keyboard_count;
     solar_os_terminal_set_status_bar(display, &status);
@@ -1289,7 +1302,7 @@ static void ble_cmd_gatt(solar_os_shell_io_t *term, int argc, char **argv)
         }
         const esp_err_t err = solar_os_ble_gatt_disconnect();
         if (err == ESP_OK) {
-            solar_os_shell_io_writeln(term, "BLE GATT disconnected");
+            solar_os_shell_io_writeln(term, "BLE GATT disconnect requested");
         } else {
             solar_os_shell_io_printf(term, "ble gatt disconnect failed: %s\n", solar_os_shell_error_text(err));
         }
@@ -1433,7 +1446,7 @@ void solar_os_shell_cmd_ble(solar_os_context_t *ctx, int argc, char **argv)
     if (strcmp(argv[1], "forget") == 0) {
         const esp_err_t err = solar_os_ble_keyboard_forget();
         if (err == ESP_OK) {
-            solar_os_shell_io_writeln(term, "BLE keyboard forgotten");
+            solar_os_shell_io_writeln(term, "BLE keyboard forget requested");
         } else {
             solar_os_shell_io_printf(term, "BLE forget failed: %s\n", solar_os_shell_error_text(err));
         }

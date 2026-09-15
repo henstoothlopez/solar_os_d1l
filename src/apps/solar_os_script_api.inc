@@ -74,6 +74,38 @@ SOLAR_OS_SCRIPT_API_FUNCTION(time, set_timezone, set_timezone);
 SOLAR_OS_SCRIPT_API_FUNCTION(time, ntp_sync, ntp_sync);
 SOLAR_OS_SCRIPT_API_MODULE_END(time);
 
+SOLAR_OS_SCRIPT_API_MODULE_BEGIN(rtc);
+SOLAR_OS_SCRIPT_API_UINT(rtc, INTERRUPT_ALARM, SOLAR_OS_RTC_INTERRUPT_ALARM);
+SOLAR_OS_SCRIPT_API_UINT(rtc, INTERRUPT_TIMER, SOLAR_OS_RTC_INTERRUPT_COUNTDOWN);
+SOLAR_OS_SCRIPT_API_FUNCTION(rtc, status, status);
+SOLAR_OS_SCRIPT_API_FUNCTION(rtc, set_alarm, set_alarm);
+SOLAR_OS_SCRIPT_API_FUNCTION(rtc, clear_alarm, clear_alarm);
+SOLAR_OS_SCRIPT_API_FUNCTION(rtc, set_timer, set_timer);
+SOLAR_OS_SCRIPT_API_FUNCTION(rtc, clear_timer, clear_timer);
+SOLAR_OS_SCRIPT_API_FUNCTION(rtc, pending, pending);
+SOLAR_OS_SCRIPT_API_FUNCTION(rtc, ack, ack);
+SOLAR_OS_SCRIPT_API_MODULE_END(rtc);
+
+SOLAR_OS_SCRIPT_API_MODULE_BEGIN(schedule);
+SOLAR_OS_SCRIPT_API_UINT(schedule, SUN, 1U << 0);
+SOLAR_OS_SCRIPT_API_UINT(schedule, MON, 1U << 1);
+SOLAR_OS_SCRIPT_API_UINT(schedule, TUE, 1U << 2);
+SOLAR_OS_SCRIPT_API_UINT(schedule, WED, 1U << 3);
+SOLAR_OS_SCRIPT_API_UINT(schedule, THU, 1U << 4);
+SOLAR_OS_SCRIPT_API_UINT(schedule, FRI, 1U << 5);
+SOLAR_OS_SCRIPT_API_UINT(schedule, SAT, 1U << 6);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, list, list);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, add_in, add_in);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, add_every, add_every);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, add_at, add_at);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, add_daily, add_daily);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, add_weekly, add_weekly);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, enable, enable);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, remove, remove);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, run, run);
+SOLAR_OS_SCRIPT_API_FUNCTION(schedule, stop_alarm, stop_alarm);
+SOLAR_OS_SCRIPT_API_MODULE_END(schedule);
+
 #if SOLAR_OS_PACKAGE_SERVICE_BATTERY
 SOLAR_OS_SCRIPT_API_MODULE_BEGIN(battery);
 SOLAR_OS_SCRIPT_API_FUNCTION_NAMED(
@@ -104,6 +136,8 @@ SOLAR_OS_SCRIPT_API_FUNCTION(wifi, scan, scan);
 SOLAR_OS_SCRIPT_API_FUNCTION(wifi, ap_start, ap_start);
 SOLAR_OS_SCRIPT_API_FUNCTION(wifi, ap_stop, ap_stop);
 SOLAR_OS_SCRIPT_API_FUNCTION(wifi, nat, nat);
+SOLAR_OS_SCRIPT_API_FUNCTION(wifi, repeater_start, repeater_start);
+SOLAR_OS_SCRIPT_API_FUNCTION(wifi, repeater_stop, repeater_stop);
 SOLAR_OS_SCRIPT_API_MODULE_END(wifi);
 #endif
 
@@ -409,12 +443,46 @@ SOLAR_OS_SCRIPT_API_MODULE_END(synth);
 
 #if SOLAR_OS_PACKAGE_SERVICE_BLE
 SOLAR_OS_SCRIPT_API_MODULE_BEGIN(ble);
+SOLAR_OS_SCRIPT_API_FUNCTION(ble, scan, scan);
 SOLAR_OS_SCRIPT_API_FUNCTION(ble, status, status);
 SOLAR_OS_SCRIPT_API_FUNCTION(ble, connected, connected);
 SOLAR_OS_SCRIPT_API_FUNCTION(ble, pair, pair);
 SOLAR_OS_SCRIPT_API_FUNCTION(ble, forget, forget);
 SOLAR_OS_SCRIPT_API_FUNCTION(ble, layout, layout);
 SOLAR_OS_SCRIPT_API_FUNCTION(ble, read, read);
+SOLAR_OS_SCRIPT_API_INT(ble, READ, SOLAR_OS_BLE_CHAR_READ);
+SOLAR_OS_SCRIPT_API_INT(ble, WRITE, SOLAR_OS_BLE_CHAR_WRITE);
+SOLAR_OS_SCRIPT_API_INT(ble, WRITE_NO_RESPONSE, SOLAR_OS_BLE_CHAR_WRITE_NO_RESPONSE);
+SOLAR_OS_SCRIPT_API_INT(ble, NOTIFY, SOLAR_OS_BLE_CHAR_NOTIFY);
+SOLAR_OS_SCRIPT_API_INT(ble, INDICATE, SOLAR_OS_BLE_CHAR_INDICATE);
+SOLAR_OS_SCRIPT_API_SUBMODULE_BEGIN(ble, gatt);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, capacity, capacity);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, connect, connect);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, disconnect, disconnect);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, status, status);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, services, services);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, characteristics, characteristics);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, read, read);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, write, write);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, subscribe, subscribe);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, unsubscribe, unsubscribe);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, configure_queue, configure_queue);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, gatt, poll, poll);
+SOLAR_OS_SCRIPT_API_SUBMODULE_END(ble, gatt);
+SOLAR_OS_SCRIPT_API_SUBMODULE_BEGIN(ble, server);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, create, create);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, service, service);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, characteristic, characteristic);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, start, start);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, stop, stop);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, close, close);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, status, status);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, peers, peers);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, poll, poll);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, set, set);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, send, send);
+SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION(ble, server, disconnect, disconnect);
+SOLAR_OS_SCRIPT_API_SUBMODULE_END(ble, server);
 SOLAR_OS_SCRIPT_API_MODULE_END(ble);
 #endif
 
@@ -692,6 +760,7 @@ SOLAR_OS_SCRIPT_API_FUNCTION(gfx, rect, rect);
 SOLAR_OS_SCRIPT_API_FUNCTION(gfx, fill_rect, fill_rect);
 SOLAR_OS_SCRIPT_API_FUNCTION(gfx, circle, circle);
 SOLAR_OS_SCRIPT_API_FUNCTION(gfx, fill_circle, fill_circle);
+SOLAR_OS_SCRIPT_API_FUNCTION(gfx, icon, icon);
 SOLAR_OS_SCRIPT_API_FUNCTION(gfx, bitmap, bitmap);
 SOLAR_OS_SCRIPT_API_FUNCTION(gfx, sprite, bitmap);
 SOLAR_OS_SCRIPT_API_FUNCTION(gfx, text, text);

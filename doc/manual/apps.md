@@ -4,7 +4,7 @@ title = "Application reference"
 section = "app"
 summary = "Usage, controls, and examples for every foreground application"
 aliases = ["applications"]
-keywords = "apps applications foreground controls usage examples reader writer sketch paint pointer png markdown less files edit hexedit binary agent calculator calc graph webradio radio mp3 function generator funcgen waveform sweep"
+keywords = "apps applications foreground controls usage examples launcher graphical grid icons reader writer sketch paint pointer png markdown less files edit hexedit binary agent calculator calc graph webradio radio mp3 function generator funcgen waveform sweep"
 packages_any = []
 +++
 # SolarOS Embedded Apps
@@ -42,6 +42,13 @@ Exit behavior:
   Either Alt key is accepted, including AltGr on compact keyboards.
   Switching back restores the retained terminal or graphics frame, including
   Python and Lua application screens.
+- `Alt+Enter` toggles full-screen mode in applications that use the shared TUI.
+  Either Alt key is accepted, including AltGr; on the CL-32 keyboard, use
+  `File+OK`. Full-screen mode hides the system status bar and persistent TUI
+  footer rows without changing the saved terminal profile. TUIs start in this
+  mode automatically when ten or fewer terminal rows are available. Input rows
+  remain visible, and status or error feedback can temporarily cover the last
+  content row.
 
 ## agent
 
@@ -135,8 +142,9 @@ Controls:
 
 ## arecord
 
-Record the default registered capture endpoint to a WAV file. This requires a
-registered input device; it does not require built-in board audio. With `-d`,
+Record a registered capture endpoint to a WAV file. The default is the first
+compatible input; `-i` selects a specific stream such as `adc0.capture`. This
+requires a registered input device, but not built-in board audio. With `-d`,
 recording stops after the specified number of seconds. Without `-d`, recording
 continues until app-exit, the storage fills, or the WAV size limit is reached.
 It can be launched from display, UART, USB CDC, Telnet, and other port shells.
@@ -144,7 +152,7 @@ It can be launched from display, UART, USB CDC, Telnet, and other port shells.
 Usage:
 
 ```text
-arecord [-d seconds] file.wav
+arecord [-d seconds] [-i capture-stream] file.wav
 ```
 
 Controls:
@@ -424,6 +432,10 @@ Controls:
 ## clock
 
 Full-screen graphical seven-segment clock, alarm countdown, and stopwatch.
+The countdown is serviced in the background, so it continues when the Clock
+session is suspended. It works without RTC hardware while SolarOS remains
+powered. With a wired RTC interrupt, the RTC alarm or countdown is also armed
+and explicit light sleep can wake for it.
 
 Usage:
 
@@ -437,6 +449,7 @@ Controls:
 
 - In stopwatch mode, `Space` starts/stops.
 - In stopwatch mode, any other ordinary key resets to zero.
+- Exiting a countdown removes that transient alarm and stops it if ringing.
 - `Esc` or app-exit key exits.
 
 ## com
@@ -602,6 +615,7 @@ Controls:
 The maintenance forms `help status`, `help update`, and `help reset` remain
 shell operations. SD-capable builds show terminal-width-aware progress while
 downloading and extracting one exact-version signed manual archive.
+Use `help command.status` to open the shell `status` command page.
 
 ## edit
 
@@ -622,10 +636,10 @@ Controls:
 - `Ctrl+Left`/`Ctrl+Right` move by words.
 - `Shift+Arrows` extend selection.
 - `Ctrl+A`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V` select all, copy, cut, and paste.
-- `Ctrl+F` opens Find and `F3` jumps to the next case-insensitive match,
-  wrapping at the end of the file.
-- `Ctrl+S` saves in place. `Ctrl+Q`, `Esc`, or the app-exit key exits without
-  saving pending changes.
+- `Ctrl+F` or `F3` opens Find. Matches are case-insensitive and wrap at the end
+  of the file.
+- `Ctrl+S` or `F2` saves in place. `Ctrl+Q`, `Esc`, `F10`, or the app-exit key
+  exits without saving pending changes.
 - `Ctrl++` and `Ctrl+-` adjust editor text size for the active session.
 
 ## hexedit
@@ -655,6 +669,52 @@ Controls:
 - `Ctrl+S` saves in place. `Ctrl+Q`, `Esc`, or the app-exit key exits without
   saving pending changes.
 - `Ctrl++` and `Ctrl+-` adjust editor text size for the active session.
+
+## launcher
+
+Configurable native graphical launcher for display shells. It draws the configured
+grid, centers one icon in each occupied cell, and shows the selected icon larger
+with its title centered underneath. Arrow keys move between occupied cells,
+`Enter` opens the selection, and a pointer selects and opens items by point and
+click. `Esc` or the app-exit key returns to the shell.
+
+Usage:
+
+```text
+launcher [config.json]
+```
+
+Without an argument, Launcher reads `launcher.json` from the active storage root.
+The first run creates a usable default file there. A supplied path selects another
+configuration. Launcher reloads the file whenever a child application returns,
+so editing the configuration through a launcher item takes effect immediately.
+
+The file is JSON. `layout.columns` and `layout.rows` define a grid from 1 by 1
+through 8 by 8. Each item has a displayed `name`, an Open Iconic `icon`
+name, a SolarOS shell `command`, and a zero-based `column` and `row`. A cell can
+contain at most one item, and a configuration can contain up to 32 items:
+
+```json
+{
+  "layout": {"columns": 3, "rows": 2},
+  "items": [
+    {"name": "Files", "icon": "folder", "command": "files", "column": 0, "row": 0},
+    {"name": "Manual", "icon": "book", "command": "help", "column": 1, "row": 0},
+    {"name": "Wi-Fi", "icon": "wifi", "command": "wifi", "column": 2, "row": 0},
+    {"name": "Sketch", "icon": "brush", "command": "sketch", "column": 0, "row": 1}
+  ]
+}
+```
+
+Icon names are the lowercase, hyphenated Open Iconic names, such as `book`,
+`browser`, `brush`, `calculator`, `clock`, `cog`, `document`, `folder`, `home`,
+`musical-note`, `pencil`, `tablet`, `terminal`, and `wifi`. Legacy numeric IDs
+from 0 through 222 remain accepted for existing configurations.
+
+Commands use the normal SolarOS shell parser, so arguments, aliases, scripts,
+and application availability checks behave exactly as at the prompt. A launched
+foreground application returns to Launcher when it closes. A command that does
+not open an application returns to the shell so its output remains visible.
 
 ## files
 
@@ -923,7 +983,7 @@ Controls:
 
 ## gameboy
 
-Original Game Boy (DMG) emulator included in the `games` group on boards with
+Original Game Boy (DMG) emulator selected by the `gameboy` group on boards with
 PSRAM, SD storage, graphics, and a streaming display. Current integrated
 targets are Waveshare RLCD, Freenove IPS, ODROID-GO, Freenove PAL, and TTGO
 VGA32. The application loads a user-supplied ROM into PSRAM and writes

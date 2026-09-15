@@ -26,6 +26,8 @@
 #include "solar_os_memory.h"
 #include "solar_os_messaging.h"
 #include "solar_os_task.h"
+#include "solar_os_rtc.h"
+#include "solar_os_schedule.h"
 #if SOLAR_OS_PACKAGE_SERVICE_ADC
 #include "solar_os_adc.h"
 #endif
@@ -188,6 +190,7 @@ typedef enum {
     SOLUA_EVENT_GFX_FILL_RECT,
     SOLUA_EVENT_GFX_CIRCLE,
     SOLUA_EVENT_GFX_FILL_CIRCLE,
+    SOLUA_EVENT_GFX_ICON,
     SOLUA_EVENT_GFX_BITMAP,
     SOLUA_EVENT_GFX_TEXT,
     SOLUA_EVENT_DONE,
@@ -684,6 +687,23 @@ static solar_os_gfx_font_t solua_gfx_font_from_arg(lua_State *L, int index)
     return (solar_os_gfx_font_t)value;
 }
 
+static solar_os_gfx_icon_size_t solua_gfx_icon_size_from_arg(lua_State *L,
+                                                              int index)
+{
+    const lua_Integer value = luaL_checkinteger(L, index);
+    switch (value) {
+    case SOLAR_OS_GFX_ICON_SIZE_8:
+    case SOLAR_OS_GFX_ICON_SIZE_16:
+    case SOLAR_OS_GFX_ICON_SIZE_32:
+    case SOLAR_OS_GFX_ICON_SIZE_48:
+    case SOLAR_OS_GFX_ICON_SIZE_64:
+        return (solar_os_gfx_icon_size_t)value;
+    default:
+        luaL_error(L, "icon size must be 8, 16, 32, 48, or 64");
+        return SOLAR_OS_GFX_ICON_SIZE_8;
+    }
+}
+
 static void solua_resolve_path(lua_State *L, int index, char *path, size_t path_len)
 {
     const char *arg = luaL_checkstring(L, index);
@@ -795,6 +815,8 @@ static void solua_push_battery_status(lua_State *L, const solar_os_battery_statu
     solua_set_bool(L, -1, "percent_estimated", status->percent_estimated);
     solua_set_bool(L, -1, "adc_calibrated", status->adc_calibrated);
     solua_set_bool(L, -1, "external_power", status->external_power);
+    solua_set_bool(L, -1, "charging", status->charging);
+    solua_set_bool(L, -1, "charging_known", status->charging_known);
 }
 #endif
 
@@ -820,6 +842,8 @@ static void solua_push_wifi_status(lua_State *L, const solar_os_wifi_status_t *s
     solua_set_bool(L, -1, "has_saved_ap_config", status->has_saved_ap_config);
     solua_set_bool(L, -1, "nat_enabled", status->nat_enabled);
     solua_set_bool(L, -1, "nat_active", status->nat_active);
+    solua_set_bool(L, -1, "repeater_enabled", status->repeater_enabled);
+    solua_set_bool(L, -1, "repeater_active", status->repeater_active);
     solua_set_bool(L, -1, "ap_enabled", status->ap_enabled);
     solua_set_bool(L, -1, "ap_running", status->ap_running);
     solua_set_str(L, -1, "ssid", status->ssid);
@@ -839,6 +863,10 @@ static void solua_push_wifi_status(lua_State *L, const solar_os_wifi_status_t *s
     solua_set_int(L, -1, "ap_station_count", status->ap_station_count);
     solua_set_int(L, -1, "ap_max_connections", status->ap_max_connections);
     solua_set_int(L, -1, "saved_profile_count", status->saved_profile_count);
+    solua_set_int(L, -1, "repeater_learned_clients", status->repeater_learned_clients);
+    solua_set_int(L, -1, "repeater_upstream_frames", status->repeater_upstream_frames);
+    solua_set_int(L, -1, "repeater_downstream_frames", status->repeater_downstream_frames);
+    solua_set_int(L, -1, "repeater_dropped_frames", status->repeater_dropped_frames);
     solua_set_int(L, -1, "nat_last_error", status->nat_last_error);
     solua_set_str(L, -1, "nat_last_error_name", esp_err_to_name(status->nat_last_error));
 }
@@ -1166,6 +1194,8 @@ static int solua_solaros_wifi_status_short(lua_State *L)
     solua_set_str(L, -1, "ap_ip", status.ap_ip);
     solua_set_bool(L, -1, "nat_enabled", status.nat_enabled);
     solua_set_bool(L, -1, "nat_active", status.nat_active);
+    solua_set_bool(L, -1, "repeater_enabled", status.repeater_enabled);
+    solua_set_bool(L, -1, "repeater_active", status.repeater_active);
     return 1;
 }
 #endif
@@ -1517,6 +1547,204 @@ static int solua_time_ntp_sync(lua_State *L)
     return 1;
 }
 
+static int solua_rtc_status(lua_State *L)
+{
+    solar_os_rtc_info_t info;
+    const esp_err_t err = solar_os_rtc_get_info(&info);
+    lua_newtable(L);
+    solua_set_bool(L, -1, "available", err == ESP_OK);
+    if (err == ESP_OK) {
+        solua_set_str(L, -1, "provider", info.provider);
+        solua_set_int(L, -1, "capabilities", info.capabilities);
+        solua_set_int(L, -1, "interrupt_gpio", info.interrupt_gpio);
+        solua_set_int(L, -1, "interrupt_active_level", info.interrupt_active_level);
+        solua_set_str(L, -1, "alarm_owner", info.alarm_owner);
+        solua_set_str(L, -1, "timer_owner", info.countdown_owner);
+    }
+    return 1;
+}
+
+static int solua_rtc_set_alarm(lua_State *L)
+{
+    const uint32_t hour = solua_check_u32(L, 1);
+    const uint32_t minute = solua_check_u32(L, 2);
+    const uint32_t second = solua_optional_u32(L, 3, 0);
+    const uint32_t day = solua_optional_u32(L, 4, 0);
+    const uint32_t weekday = solua_optional_u32(L, 5, 7);
+    luaL_argcheck(L, hour <= 23 && minute <= 59 && second <= 59 &&
+                  day <= 31 && weekday <= 7, 1, "invalid RTC alarm fields");
+    solar_os_rtc_alarm_t alarm = {
+        .match_fields = SOLAR_OS_RTC_ALARM_MATCH_SECOND |
+            SOLAR_OS_RTC_ALARM_MATCH_MINUTE | SOLAR_OS_RTC_ALARM_MATCH_HOUR,
+        .second = (uint8_t)second,
+        .minute = (uint8_t)minute,
+        .hour = (uint8_t)hour,
+    };
+    if (day != 0) {
+        alarm.day = (uint8_t)day;
+        alarm.match_fields |= SOLAR_OS_RTC_ALARM_MATCH_DAY;
+    }
+    if (weekday <= 6) {
+        alarm.weekday = (uint8_t)weekday;
+        alarm.match_fields |= SOLAR_OS_RTC_ALARM_MATCH_WEEKDAY;
+    }
+    return solua_check_esp(L, solar_os_rtc_set_alarm_for("lua", &alarm));
+}
+
+static int solua_rtc_clear_alarm(lua_State *L)
+{
+    (void)L;
+    return solua_check_esp(L, solar_os_rtc_disable_alarm_for("lua"));
+}
+
+static int solua_rtc_set_timer(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_rtc_set_countdown_for(
+        "lua", solua_check_u32(L, 1), lua_toboolean(L, 2) != 0));
+}
+
+static int solua_rtc_clear_timer(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_rtc_disable_countdown_for("lua"));
+}
+
+static int solua_rtc_pending(lua_State *L)
+{
+    uint32_t pending = 0;
+    (void)solua_check_esp(L, solar_os_rtc_get_interrupt_status(&pending));
+    lua_pushinteger(L, pending);
+    return 1;
+}
+
+static int solua_rtc_ack(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_rtc_clear_interrupt_status(solua_check_u32(L, 1)));
+}
+
+static solar_os_schedule_action_t solua_schedule_action(lua_State *L, int index)
+{
+    const char *action = solua_optional_str(L, index, "alarm");
+    if (strcmp(action, "alarm") == 0) return SOLAR_OS_SCHEDULE_ACTION_ALARM;
+    if (strcmp(action, "run") == 0) return SOLAR_OS_SCHEDULE_ACTION_SCRIPT;
+    luaL_error(L, "action must be alarm or run");
+    return SOLAR_OS_SCHEDULE_ACTION_ALARM;
+}
+
+static void solua_push_schedule_entry(lua_State *L,
+                                      const solar_os_schedule_entry_t *entry)
+{
+    lua_newtable(L);
+    solua_set_str(L, -1, "name", entry->name);
+    solua_set_str(L, -1, "kind", solar_os_schedule_kind_name(entry->kind));
+    solua_set_str(L, -1, "action", solar_os_schedule_action_name(entry->action));
+    solua_set_str(L, -1, "value", entry->value);
+    solua_set_bool(L, -1, "enabled", entry->enabled);
+    solua_set_bool(L, -1, "persistent", entry->persistent);
+    solua_set_int(L, -1, "interval_seconds", entry->interval_seconds);
+    solua_set_int(L, -1, "at_utc_seconds", (lua_Integer)entry->at_utc_seconds);
+    solua_set_int(L, -1, "hour", entry->hour);
+    solua_set_int(L, -1, "minute", entry->minute);
+    solua_set_int(L, -1, "second", entry->second);
+    solua_set_int(L, -1, "weekdays", entry->weekdays);
+    solua_set_int(L, -1, "run_count", entry->run_count);
+    solua_set_int(L, -1, "skipped_count", entry->skipped_count);
+}
+
+static int solua_schedule_list(lua_State *L)
+{
+    lua_newtable(L);
+    const size_t count = solar_os_schedule_count();
+    for (size_t i = 0; i < count; i++) {
+        solar_os_schedule_entry_t entry;
+        if (solar_os_schedule_get(i, &entry)) {
+            solua_push_schedule_entry(L, &entry);
+            lua_rawseti(L, -2, (lua_Integer)i + 1);
+        }
+    }
+    return 1;
+}
+
+static int solua_schedule_add_in(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_schedule_add_relative(
+        luaL_checkstring(L, 1), solua_check_u32(L, 2),
+        solua_schedule_action(L, 3), solua_optional_str(L, 4, NULL),
+        lua_gettop(L) < 5 || lua_toboolean(L, 5) != 0));
+}
+
+static int solua_schedule_add_every(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_schedule_add_interval(
+        luaL_checkstring(L, 1), solua_check_u32(L, 2),
+        solua_schedule_action(L, 3), solua_optional_str(L, 4, NULL)));
+}
+
+static int solua_schedule_add_at(lua_State *L)
+{
+    const uint32_t year = solua_check_u32(L, 2);
+    const uint32_t month = solua_check_u32(L, 3);
+    const uint32_t day = solua_check_u32(L, 4);
+    const uint32_t hour = solua_check_u32(L, 5);
+    const uint32_t minute = solua_check_u32(L, 6);
+    const uint32_t second = solua_check_u32(L, 7);
+    luaL_argcheck(L, year <= UINT16_MAX && month <= UINT8_MAX && day <= UINT8_MAX &&
+                  hour <= UINT8_MAX && minute <= UINT8_MAX && second <= UINT8_MAX,
+                  2, "calendar fields out of range");
+    return solua_check_esp(L, solar_os_schedule_add_at(
+        luaL_checkstring(L, 1), year, month, day, hour, minute, second,
+        solua_schedule_action(L, 8),
+        solua_optional_str(L, 9, NULL)));
+}
+
+static int solua_schedule_add_daily(lua_State *L)
+{
+    const uint32_t hour = solua_check_u32(L, 2);
+    const uint32_t minute = solua_check_u32(L, 3);
+    const uint32_t second = solua_check_u32(L, 4);
+    luaL_argcheck(L, hour <= UINT8_MAX && minute <= UINT8_MAX && second <= UINT8_MAX,
+                  2, "time fields out of range");
+    return solua_check_esp(L, solar_os_schedule_add_daily(
+        luaL_checkstring(L, 1), hour, minute, second, solua_schedule_action(L, 5),
+        solua_optional_str(L, 6, NULL)));
+}
+
+static int solua_schedule_add_weekly(lua_State *L)
+{
+    const uint32_t weekdays = solua_check_u32(L, 2);
+    const uint32_t hour = solua_check_u32(L, 3);
+    const uint32_t minute = solua_check_u32(L, 4);
+    const uint32_t second = solua_check_u32(L, 5);
+    luaL_argcheck(L, weekdays <= UINT8_MAX && hour <= UINT8_MAX &&
+                  minute <= UINT8_MAX && second <= UINT8_MAX,
+                  2, "weekly fields out of range");
+    return solua_check_esp(L, solar_os_schedule_add_weekly(
+        luaL_checkstring(L, 1), weekdays, hour, minute, second,
+        solua_schedule_action(L, 6), solua_optional_str(L, 7, NULL)));
+}
+
+static int solua_schedule_enable(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_schedule_set_enabled(
+        luaL_checkstring(L, 1), lua_toboolean(L, 2) != 0));
+}
+
+static int solua_schedule_remove(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_schedule_remove(luaL_checkstring(L, 1)));
+}
+
+static int solua_schedule_run(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_schedule_run(luaL_checkstring(L, 1)));
+}
+
+static int solua_schedule_stop_alarm(lua_State *L)
+{
+    (void)L;
+    solar_os_schedule_stop_alarm();
+    return 0;
+}
+
 #if SOLAR_OS_PACKAGE_SERVICE_SENSORS
 static int solua_sensors_environment(lua_State *L)
 {
@@ -1640,6 +1868,16 @@ static int solua_wifi_ap_stop(lua_State *L)
 static int solua_wifi_nat(lua_State *L)
 {
     return solua_check_esp(L, solar_os_wifi_nat_set(lua_toboolean(L, 1)));
+}
+
+static int solua_wifi_repeater_start(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_wifi_repeater_start());
+}
+
+static int solua_wifi_repeater_stop(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_wifi_repeater_stop());
 }
 #endif
 
@@ -3870,6 +4108,10 @@ static int solua_expansion_drivers(lua_State *L)
         lua_newtable(L);
         solua_set_str(L, -1, "name", driver.name);
         solua_set_str(L, -1, "summary", driver.summary);
+        solua_set_str(L,
+                      -1,
+                      "category",
+                      solar_os_expansion_category_name(driver.category));
         solua_set_int(L,
                       -1,
                       "required_capabilities",
@@ -3918,7 +4160,8 @@ static bool solua_expansion_key_known(const char *key)
 {
     static const char *const keys[] = {
         "spi", "cs", "ce", "i2c", "addr", "uart", "ps2", "gpio", "irq", "reset",
-        "rst", "data", "bck", "din", "rck", "dc", "busy", "adc", "pwm",
+        "rst", "data", "bck", "din", "rck", "mclk", "ws", "dout", "dc",
+        "busy", "adc", "pwm", "backlight", "a", "b",
         "count", "keys", "x", "y", "min", "center", "max", "deadzone",
     };
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -4145,10 +4388,16 @@ static int solua_expansion_attach(lua_State *L)
         {"bck", "bck", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"din", "din", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"rck", "rck", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"mclk", "mclk", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"ws", "ws", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"dout", "dout", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"dc", "dc", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"busy", "busy", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"adc", "adc", SOLAR_OS_EXPANSION_BINDING_ADC},
         {"pwm", "pwm", SOLAR_OS_EXPANSION_BINDING_PWM},
+        {"backlight", "backlight", SOLAR_OS_EXPANSION_BINDING_PWM},
+        {"a", "a", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"b", "b", SOLAR_OS_EXPANSION_BINDING_GPIO},
     };
     int reset = 0;
     int rst = 0;
@@ -5007,6 +5256,7 @@ static int solua_ble_read(lua_State *L)
     lua_pushlstring(L, buffer, read_len);
     return 1;
 }
+#include "solar_os_lua_ble.inc"
 #endif
 
 #if SOLAR_OS_PACKAGE_SERVICE_HID
@@ -6522,6 +6772,23 @@ static int solua_gfx_fill_circle(lua_State *L)
     return 0;
 }
 
+static int solua_gfx_icon(lua_State *L)
+{
+    solar_os_gfx_icon_t icon;
+    if (solar_os_gfx_icon_from_name(luaL_checkstring(L, 3), &icon) != ESP_OK) {
+        return luaL_error(L, "unknown icon name");
+    }
+    const solua_event_t event = {
+        .type = SOLUA_EVENT_GFX_ICON,
+        .x0 = (int32_t)luaL_checkinteger(L, 1),
+        .y0 = (int32_t)luaL_checkinteger(L, 2),
+        .width = (uint16_t)solua_gfx_icon_size_from_arg(L, 4),
+        .attr = (uint32_t)icon,
+    };
+    solua_ui_send_event(L, &event);
+    return 0;
+}
+
 static int solua_gfx_bitmap(lua_State *L)
 {
     const uint16_t width = solua_check_u16_size(L, 3);
@@ -7119,6 +7386,9 @@ esp_err_t solar_os_lua_run(const solar_os_script_run_request_t *request,
 #if SOLAR_OS_PACKAGE_SERVICE_MIDI
     solua_midi_destroy();
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_BLE
+    solua_ble_destroy();
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_NET
     solua_net_destroy();
 #endif
@@ -7126,6 +7396,7 @@ esp_err_t solar_os_lua_run(const solar_os_script_run_request_t *request,
     solua_http_stream_destroy();
     solua_http_session_destroy();
 #endif
+    solar_os_rtc_release_owner("lua");
     lua_close(L);
 
 cleanup:
@@ -7211,6 +7482,9 @@ done:
 #if SOLAR_OS_PACKAGE_SERVICE_MIDI
         solua_midi_destroy();
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_BLE
+        solua_ble_destroy();
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_NET
         solua_net_destroy();
 #endif
@@ -7218,6 +7492,7 @@ done:
         solua_http_stream_destroy();
         solua_http_session_destroy();
 #endif
+        solar_os_rtc_release_owner("lua");
         lua_close(L);
     }
 
@@ -7535,6 +7810,9 @@ static void solua_stop(solar_os_context_t *ctx)
 #if SOLAR_OS_PACKAGE_SERVICE_MIDI
     solua_midi_destroy();
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_BLE
+    solua_ble_destroy();
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_NET
     solua_net_destroy();
 #endif
@@ -7811,6 +8089,13 @@ static void solua_apply_gfx_event(solar_os_context_t *ctx, const solua_event_t *
     case SOLUA_EVENT_GFX_FILL_CIRCLE:
         solar_os_gfx_fill_circle(gfx, (int)event->x0, (int)event->y0, (int)event->width);
         break;
+    case SOLUA_EVENT_GFX_ICON:
+        solar_os_gfx_icon(gfx,
+                          (int)event->x0,
+                          (int)event->y0,
+                          (solar_os_gfx_icon_t)event->attr,
+                          (solar_os_gfx_icon_size_t)event->width);
+        break;
     case SOLUA_EVENT_GFX_BITMAP:
         solar_os_gfx_bitmap(gfx,
                             (int)event->x0,
@@ -7893,6 +8178,7 @@ static void solua_drain_events(solar_os_context_t *ctx)
         case SOLUA_EVENT_GFX_FILL_RECT:
         case SOLUA_EVENT_GFX_CIRCLE:
         case SOLUA_EVENT_GFX_FILL_CIRCLE:
+        case SOLUA_EVENT_GFX_ICON:
         case SOLUA_EVENT_GFX_BITMAP:
         case SOLUA_EVENT_GFX_TEXT:
             solua_apply_gfx_event(ctx, &event);

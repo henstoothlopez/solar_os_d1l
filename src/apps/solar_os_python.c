@@ -36,6 +36,8 @@
 #include "solar_os_memory.h"
 #include "solar_os_messaging.h"
 #include "solar_os_task.h"
+#include "solar_os_rtc.h"
+#include "solar_os_schedule.h"
 #include "solar_os_config.h"
 #if SOLAR_OS_PACKAGE_SERVICE_ADC
 #include "solar_os_adc.h"
@@ -201,6 +203,7 @@ typedef enum {
     PYTHON_EVENT_GFX_FILL_RECT,
     PYTHON_EVENT_GFX_CIRCLE,
     PYTHON_EVENT_GFX_FILL_CIRCLE,
+    PYTHON_EVENT_GFX_ICON,
     PYTHON_EVENT_GFX_BITMAP,
     PYTHON_EVENT_GFX_TEXT,
     PYTHON_EVENT_DONE,
@@ -772,6 +775,21 @@ static solar_os_gfx_font_t python_gfx_font_from_obj(mp_obj_t obj)
     return (solar_os_gfx_font_t)value;
 }
 
+static solar_os_gfx_icon_size_t python_gfx_icon_size_from_obj(mp_obj_t obj)
+{
+    const mp_int_t value = mp_obj_get_int(obj);
+    switch (value) {
+    case SOLAR_OS_GFX_ICON_SIZE_8:
+    case SOLAR_OS_GFX_ICON_SIZE_16:
+    case SOLAR_OS_GFX_ICON_SIZE_32:
+    case SOLAR_OS_GFX_ICON_SIZE_48:
+    case SOLAR_OS_GFX_ICON_SIZE_64:
+        return (solar_os_gfx_icon_size_t)value;
+    default:
+        mp_raise_ValueError(MP_ERROR_TEXT("icon size must be 8, 16, 32, 48, or 64"));
+    }
+}
+
 static void python_resolve_path_obj(mp_obj_t obj, char *path, size_t path_len)
 {
     python_check_esp(solar_os_storage_resolve_path(mp_obj_str_get_str(obj), path, path_len));
@@ -891,7 +909,7 @@ static mp_obj_t python_storage_block_to_dict(const solar_os_storage_block_t *blo
 #if SOLAR_OS_PACKAGE_SERVICE_WIFI
 static mp_obj_t python_wifi_status_to_dict(const solar_os_wifi_status_t *status)
 {
-    mp_obj_t dict = mp_obj_new_dict(24);
+    mp_obj_t dict = mp_obj_new_dict(36);
     python_dict_store_cstr(dict, "state", solar_os_wifi_state_name(status->state));
     python_dict_store_bool(dict, "initialized", status->initialized);
     python_dict_store_bool(dict, "started", status->started);
@@ -901,6 +919,8 @@ static mp_obj_t python_wifi_status_to_dict(const solar_os_wifi_status_t *status)
     python_dict_store_bool(dict, "has_saved_ap_config", status->has_saved_ap_config);
     python_dict_store_bool(dict, "nat_enabled", status->nat_enabled);
     python_dict_store_bool(dict, "nat_active", status->nat_active);
+    python_dict_store_bool(dict, "repeater_enabled", status->repeater_enabled);
+    python_dict_store_bool(dict, "repeater_active", status->repeater_active);
     python_dict_store_bool(dict, "ap_enabled", status->ap_enabled);
     python_dict_store_bool(dict, "ap_running", status->ap_running);
     python_dict_store_cstr(dict, "ssid", status->ssid);
@@ -920,6 +940,10 @@ static mp_obj_t python_wifi_status_to_dict(const solar_os_wifi_status_t *status)
     python_dict_store_int(dict, "ap_station_count", status->ap_station_count);
     python_dict_store_int(dict, "ap_max_connections", status->ap_max_connections);
     python_dict_store_int(dict, "saved_profile_count", status->saved_profile_count);
+    python_dict_store_int(dict, "repeater_learned_clients", status->repeater_learned_clients);
+    python_dict_store_u64(dict, "repeater_upstream_frames", status->repeater_upstream_frames);
+    python_dict_store_u64(dict, "repeater_downstream_frames", status->repeater_downstream_frames);
+    python_dict_store_u64(dict, "repeater_dropped_frames", status->repeater_dropped_frames);
     python_dict_store_int(dict, "nat_last_error", status->nat_last_error);
     python_dict_store_cstr(dict, "nat_last_error_name", esp_err_to_name(status->nat_last_error));
     return dict;
@@ -1128,12 +1152,14 @@ static mp_obj_t solaros_battery(void)
         return mp_const_none;
     }
 
-    mp_obj_t dict = mp_obj_new_dict(5);
+    mp_obj_t dict = mp_obj_new_dict(7);
     python_dict_store_int(dict, "voltage_mv", status.voltage_mv);
     python_dict_store_int(dict, "percent", status.percent);
     python_dict_store_bool(dict, "percent_estimated", status.percent_estimated);
     python_dict_store_bool(dict, "adc_calibrated", status.adc_calibrated);
     python_dict_store_bool(dict, "external_power", status.external_power);
+    python_dict_store_bool(dict, "charging", status.charging);
+    python_dict_store_bool(dict, "charging_known", status.charging_known);
     return dict;
 }
 MP_DEFINE_CONST_FUN_OBJ_0(solaros_battery_obj, solaros_battery);
@@ -1145,7 +1171,7 @@ static mp_obj_t solaros_wifi(void)
     solar_os_wifi_status_t status;
     solar_os_wifi_get_status(&status);
 
-    mp_obj_t dict = mp_obj_new_dict(12);
+    mp_obj_t dict = mp_obj_new_dict(14);
     python_dict_store_cstr(dict, "state", solar_os_wifi_state_name(status.state));
     python_dict_store_bool(dict, "started", status.started);
     python_dict_store_bool(dict, "connected", status.connected);
@@ -1158,6 +1184,8 @@ static mp_obj_t solaros_wifi(void)
     python_dict_store_cstr(dict, "ap_ip", status.ap_ip);
     python_dict_store_bool(dict, "nat_enabled", status.nat_enabled);
     python_dict_store_bool(dict, "nat_active", status.nat_active);
+    python_dict_store_bool(dict, "repeater_enabled", status.repeater_enabled);
+    python_dict_store_bool(dict, "repeater_active", status.repeater_active);
     return dict;
 }
 MP_DEFINE_CONST_FUN_OBJ_0(solaros_wifi_obj, solaros_wifi);
@@ -1552,6 +1580,240 @@ static mp_obj_t solaros_time_ntp_sync(size_t n_args, const mp_obj_t *args)
 }
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_time_ntp_sync_obj, 0, 2, solaros_time_ntp_sync);
 
+static mp_obj_t solaros_rtc_status(void)
+{
+    solar_os_rtc_info_t info;
+    const esp_err_t err = solar_os_rtc_get_info(&info);
+    mp_obj_t dict = mp_obj_new_dict(8);
+    python_dict_store_bool(dict, "available", err == ESP_OK);
+    if (err == ESP_OK) {
+        python_dict_store_cstr(dict, "provider", info.provider);
+        python_dict_store_uint(dict, "capabilities", info.capabilities);
+        python_dict_store_int(dict, "interrupt_gpio", info.interrupt_gpio);
+        python_dict_store_int(dict, "interrupt_active_level", info.interrupt_active_level);
+        python_dict_store_cstr(dict, "alarm_owner", info.alarm_owner);
+        python_dict_store_cstr(dict, "timer_owner", info.countdown_owner);
+    }
+    return dict;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_rtc_status_obj, solaros_rtc_status);
+
+static mp_obj_t solaros_rtc_set_alarm(size_t n_args, const mp_obj_t *args)
+{
+    const uint32_t hour = python_u32_from_obj(args[0]);
+    const uint32_t minute = python_u32_from_obj(args[1]);
+    const uint32_t second = python_optional_u32(n_args, args, 2, 0);
+    const uint32_t day = python_optional_u32(n_args, args, 3, 0);
+    const uint32_t weekday = python_optional_u32(n_args, args, 4, 7);
+    if (hour > 23 || minute > 59 || second > 59 || day > 31 || weekday > 7) {
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid RTC alarm fields"));
+    }
+    solar_os_rtc_alarm_t alarm = {
+        .match_fields = SOLAR_OS_RTC_ALARM_MATCH_SECOND |
+            SOLAR_OS_RTC_ALARM_MATCH_MINUTE | SOLAR_OS_RTC_ALARM_MATCH_HOUR,
+        .second = (uint8_t)second,
+        .minute = (uint8_t)minute,
+        .hour = (uint8_t)hour,
+    };
+    if (day != 0) {
+        alarm.day = (uint8_t)day;
+        alarm.match_fields |= SOLAR_OS_RTC_ALARM_MATCH_DAY;
+    }
+    if (weekday <= 6) {
+        alarm.weekday = (uint8_t)weekday;
+        alarm.match_fields |= SOLAR_OS_RTC_ALARM_MATCH_WEEKDAY;
+    }
+    python_check_esp(solar_os_rtc_set_alarm_for("python", &alarm));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_rtc_set_alarm_obj, 2, 5, solaros_rtc_set_alarm);
+
+static mp_obj_t solaros_rtc_clear_alarm(void)
+{
+    python_check_esp(solar_os_rtc_disable_alarm_for("python"));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_rtc_clear_alarm_obj, solaros_rtc_clear_alarm);
+
+static mp_obj_t solaros_rtc_set_timer(size_t n_args, const mp_obj_t *args)
+{
+    const uint32_t seconds = python_u32_from_obj(args[0]);
+    const bool repeat = n_args > 1 && mp_obj_is_true(args[1]);
+    python_check_esp(solar_os_rtc_set_countdown_for("python", seconds, repeat));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_rtc_set_timer_obj, 1, 2, solaros_rtc_set_timer);
+
+static mp_obj_t solaros_rtc_clear_timer(void)
+{
+    python_check_esp(solar_os_rtc_disable_countdown_for("python"));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_rtc_clear_timer_obj, solaros_rtc_clear_timer);
+
+static mp_obj_t solaros_rtc_pending(void)
+{
+    uint32_t pending = 0;
+    python_check_esp(solar_os_rtc_get_interrupt_status(&pending));
+    return mp_obj_new_int_from_uint(pending);
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_rtc_pending_obj, solaros_rtc_pending);
+
+static mp_obj_t solaros_rtc_ack(mp_obj_t mask_obj)
+{
+    python_check_esp(solar_os_rtc_clear_interrupt_status(python_u32_from_obj(mask_obj)));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_1(solaros_rtc_ack_obj, solaros_rtc_ack);
+
+static solar_os_schedule_action_t python_schedule_action(const char *action)
+{
+    if (strcmp(action, "alarm") == 0) return SOLAR_OS_SCHEDULE_ACTION_ALARM;
+    if (strcmp(action, "run") == 0) return SOLAR_OS_SCHEDULE_ACTION_SCRIPT;
+    mp_raise_ValueError(MP_ERROR_TEXT("action must be alarm or run"));
+    return SOLAR_OS_SCHEDULE_ACTION_ALARM;
+}
+
+static mp_obj_t python_schedule_entry_obj(const solar_os_schedule_entry_t *entry)
+{
+    mp_obj_t dict = mp_obj_new_dict(14);
+    python_dict_store_cstr(dict, "name", entry->name);
+    python_dict_store_cstr(dict, "kind", solar_os_schedule_kind_name(entry->kind));
+    python_dict_store_cstr(dict, "action", solar_os_schedule_action_name(entry->action));
+    python_dict_store_cstr(dict, "value", entry->value);
+    python_dict_store_bool(dict, "enabled", entry->enabled);
+    python_dict_store_bool(dict, "persistent", entry->persistent);
+    python_dict_store_uint(dict, "interval_seconds", entry->interval_seconds);
+    python_dict_store_u64(dict, "at_utc_seconds", entry->at_utc_seconds);
+    python_dict_store_uint(dict, "hour", entry->hour);
+    python_dict_store_uint(dict, "minute", entry->minute);
+    python_dict_store_uint(dict, "second", entry->second);
+    python_dict_store_uint(dict, "weekdays", entry->weekdays);
+    python_dict_store_uint(dict, "run_count", entry->run_count);
+    python_dict_store_uint(dict, "skipped_count", entry->skipped_count);
+    return dict;
+}
+
+static mp_obj_t solaros_schedule_list(void)
+{
+    mp_obj_t list = mp_obj_new_list(0, NULL);
+    const size_t count = solar_os_schedule_count();
+    for (size_t i = 0; i < count; i++) {
+        solar_os_schedule_entry_t entry;
+        if (solar_os_schedule_get(i, &entry)) {
+            mp_obj_list_append(list, python_schedule_entry_obj(&entry));
+        }
+    }
+    return list;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_schedule_list_obj, solaros_schedule_list);
+
+static mp_obj_t solaros_schedule_add_in(size_t n_args, const mp_obj_t *args)
+{
+    const char *name = mp_obj_str_get_str(args[0]);
+    const uint32_t seconds = python_u32_from_obj(args[1]);
+    const char *action_name = python_optional_str(n_args, args, 2, "alarm");
+    const char *value = python_optional_str(n_args, args, 3, NULL);
+    const bool persistent = n_args < 5 || mp_obj_is_true(args[4]);
+    python_check_esp(solar_os_schedule_add_relative(name, seconds,
+        python_schedule_action(action_name), value, persistent));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_schedule_add_in_obj, 2, 5, solaros_schedule_add_in);
+
+static mp_obj_t solaros_schedule_add_every(size_t n_args, const mp_obj_t *args)
+{
+    const char *action_name = python_optional_str(n_args, args, 2, "alarm");
+    python_check_esp(solar_os_schedule_add_interval(
+        mp_obj_str_get_str(args[0]), python_u32_from_obj(args[1]),
+        python_schedule_action(action_name), python_optional_str(n_args, args, 3, NULL)));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_schedule_add_every_obj, 2, 4, solaros_schedule_add_every);
+
+static mp_obj_t solaros_schedule_add_at(size_t n_args, const mp_obj_t *args)
+{
+    const char *action_name = python_optional_str(n_args, args, 7, "alarm");
+    const uint32_t year = python_u32_from_obj(args[1]);
+    const uint32_t month = python_u32_from_obj(args[2]);
+    const uint32_t day = python_u32_from_obj(args[3]);
+    const uint32_t hour = python_u32_from_obj(args[4]);
+    const uint32_t minute = python_u32_from_obj(args[5]);
+    const uint32_t second = python_u32_from_obj(args[6]);
+    if (year > UINT16_MAX || month > UINT8_MAX || day > UINT8_MAX ||
+        hour > UINT8_MAX || minute > UINT8_MAX || second > UINT8_MAX) {
+        mp_raise_ValueError(MP_ERROR_TEXT("calendar fields out of range"));
+    }
+    python_check_esp(solar_os_schedule_add_at(mp_obj_str_get_str(args[0]),
+        year, month, day, hour, minute, second,
+        python_schedule_action(action_name), python_optional_str(n_args, args, 8, NULL)));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_schedule_add_at_obj, 7, 9, solaros_schedule_add_at);
+
+static mp_obj_t solaros_schedule_add_daily(size_t n_args, const mp_obj_t *args)
+{
+    const char *action_name = python_optional_str(n_args, args, 4, "alarm");
+    const uint32_t hour = python_u32_from_obj(args[1]);
+    const uint32_t minute = python_u32_from_obj(args[2]);
+    const uint32_t second = python_u32_from_obj(args[3]);
+    if (hour > UINT8_MAX || minute > UINT8_MAX || second > UINT8_MAX) {
+        mp_raise_ValueError(MP_ERROR_TEXT("time fields out of range"));
+    }
+    python_check_esp(solar_os_schedule_add_daily(mp_obj_str_get_str(args[0]),
+        hour, minute, second, python_schedule_action(action_name),
+        python_optional_str(n_args, args, 5, NULL)));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_schedule_add_daily_obj, 4, 6, solaros_schedule_add_daily);
+
+static mp_obj_t solaros_schedule_add_weekly(size_t n_args, const mp_obj_t *args)
+{
+    const char *action_name = python_optional_str(n_args, args, 5, "alarm");
+    const uint32_t weekdays = python_u32_from_obj(args[1]);
+    const uint32_t hour = python_u32_from_obj(args[2]);
+    const uint32_t minute = python_u32_from_obj(args[3]);
+    const uint32_t second = python_u32_from_obj(args[4]);
+    if (weekdays > UINT8_MAX || hour > UINT8_MAX ||
+        minute > UINT8_MAX || second > UINT8_MAX) {
+        mp_raise_ValueError(MP_ERROR_TEXT("weekly fields out of range"));
+    }
+    python_check_esp(solar_os_schedule_add_weekly(mp_obj_str_get_str(args[0]),
+        weekdays, hour, minute, second,
+        python_schedule_action(action_name), python_optional_str(n_args, args, 6, NULL)));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_schedule_add_weekly_obj, 5, 7, solaros_schedule_add_weekly);
+
+static mp_obj_t solaros_schedule_enable(mp_obj_t name_obj, mp_obj_t enabled_obj)
+{
+    python_check_esp(solar_os_schedule_set_enabled(mp_obj_str_get_str(name_obj),
+                                                   mp_obj_is_true(enabled_obj)));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_2(solaros_schedule_enable_obj, solaros_schedule_enable);
+
+static mp_obj_t solaros_schedule_remove(mp_obj_t name_obj)
+{
+    python_check_esp(solar_os_schedule_remove(mp_obj_str_get_str(name_obj)));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_1(solaros_schedule_remove_obj, solaros_schedule_remove);
+
+static mp_obj_t solaros_schedule_run(mp_obj_t name_obj)
+{
+    python_check_esp(solar_os_schedule_run(mp_obj_str_get_str(name_obj)));
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_1(solaros_schedule_run_obj, solaros_schedule_run);
+
+static mp_obj_t solaros_schedule_stop_alarm(void)
+{
+    solar_os_schedule_stop_alarm();
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_schedule_stop_alarm_obj, solaros_schedule_stop_alarm);
+
 #if SOLAR_OS_PACKAGE_SERVICE_BATTERY
 static mp_obj_t solaros_battery_status(void)
 {
@@ -1706,6 +1968,20 @@ static mp_obj_t solaros_wifi_nat(mp_obj_t enabled_obj)
     return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_1(solaros_wifi_nat_obj, solaros_wifi_nat);
+
+static mp_obj_t solaros_wifi_repeater_start(void)
+{
+    python_check_esp(solar_os_wifi_repeater_start());
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_wifi_repeater_start_obj, solaros_wifi_repeater_start);
+
+static mp_obj_t solaros_wifi_repeater_stop(void)
+{
+    python_check_esp(solar_os_wifi_repeater_stop());
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_0(solaros_wifi_repeater_stop_obj, solaros_wifi_repeater_stop);
 #endif
 
 #if SOLAR_OS_PACKAGE_SERVICE_MQTT
@@ -4100,9 +4376,12 @@ static mp_obj_t solaros_expansion_drivers(void)
         if (!solar_os_expansion_get_driver(i, &driver)) {
             continue;
         }
-        mp_obj_t item = mp_obj_new_dict(5);
+        mp_obj_t item = mp_obj_new_dict(6);
         python_dict_store_cstr(item, "name", driver.name);
         python_dict_store_cstr(item, "summary", driver.summary);
+        python_dict_store_cstr(item,
+                               "category",
+                               solar_os_expansion_category_name(driver.category));
         python_dict_store_u64(item,
                               "required_capabilities",
                               driver.required_capabilities);
@@ -4149,7 +4428,8 @@ static bool python_expansion_key_known(const char *key)
 {
     static const char *const keys[] = {
         "spi", "cs", "ce", "i2c", "addr", "uart", "ps2", "gpio", "irq", "reset",
-        "rst", "data", "bck", "din", "rck", "dc", "busy", "adc", "pwm",
+        "rst", "data", "bck", "din", "rck", "mclk", "ws", "dout", "dc",
+        "busy", "adc", "pwm", "backlight", "a", "b",
         "count", "keys", "x", "y", "min", "center", "max", "deadzone",
     };
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -4353,10 +4633,16 @@ static mp_obj_t solaros_expansion_attach(mp_obj_t driver_obj,
         {"bck", "bck", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"din", "din", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"rck", "rck", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"mclk", "mclk", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"ws", "ws", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"dout", "dout", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"dc", "dc", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"busy", "busy", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"adc", "adc", SOLAR_OS_EXPANSION_BINDING_ADC},
         {"pwm", "pwm", SOLAR_OS_EXPANSION_BINDING_PWM},
+        {"backlight", "backlight", SOLAR_OS_EXPANSION_BINDING_PWM},
+        {"a", "a", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"b", "b", SOLAR_OS_EXPANSION_BINDING_GPIO},
     };
     if (python_get_dict_obj(config_obj, "reset", false) != MP_OBJ_NULL &&
         python_get_dict_obj(config_obj, "rst", false) != MP_OBJ_NULL) {
@@ -5322,6 +5608,7 @@ static mp_obj_t solaros_ble_read(size_t n_args, const mp_obj_t *args)
     return mp_obj_new_bytes((const byte *)buffer, read_len);
 }
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_ble_read_obj, 0, 1, solaros_ble_read);
+#include "solar_os_python_ble.inc"
 #endif
 
 #if SOLAR_OS_PACKAGE_SERVICE_HID
@@ -7261,6 +7548,25 @@ static mp_obj_t solaros_gfx_fill_circle(size_t n_args, const mp_obj_t *args)
 }
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_gfx_fill_circle_obj, 3, 3, solaros_gfx_fill_circle);
 
+static mp_obj_t solaros_gfx_icon(size_t n_args, const mp_obj_t *args)
+{
+    (void)n_args;
+    solar_os_gfx_icon_t icon;
+    if (solar_os_gfx_icon_from_name(mp_obj_str_get_str(args[2]), &icon) != ESP_OK) {
+        mp_raise_ValueError(MP_ERROR_TEXT("unknown icon name"));
+    }
+    const python_event_t event = {
+        .type = PYTHON_EVENT_GFX_ICON,
+        .x0 = python_i32_from_obj(args[0]),
+        .y0 = python_i32_from_obj(args[1]),
+        .width = (uint16_t)python_gfx_icon_size_from_obj(args[3]),
+        .attr = (uint32_t)icon,
+    };
+    python_gfx_send_event(&event);
+    return mp_const_none;
+}
+MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(solaros_gfx_icon_obj, 4, 4, solaros_gfx_icon);
+
 static mp_obj_t solaros_gfx_bitmap(size_t n_args, const mp_obj_t *args)
 {
     (void)n_args;
@@ -7603,6 +7909,9 @@ esp_err_t solar_os_python_run(const solar_os_script_run_request_t *request,
 #if SOLAR_OS_PACKAGE_SERVICE_MIDI
     python_midi_destroy();
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_BLE
+    python_ble_destroy();
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_NET
     python_net_destroy();
 #endif
@@ -7610,6 +7919,7 @@ esp_err_t solar_os_python_run(const solar_os_script_run_request_t *request,
     python_http_stream_destroy();
     python_http_session_destroy();
 #endif
+    solar_os_rtc_release_owner("python");
     mp_embed_deinit();
     python_app.vm_active = false;
     python_runner_control = NULL;
@@ -7806,6 +8116,9 @@ static void python_task(void *arg)
 #if SOLAR_OS_PACKAGE_SERVICE_MIDI
         python_midi_destroy();
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_BLE
+        python_ble_destroy();
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_NET
         python_net_destroy();
 #endif
@@ -7813,6 +8126,7 @@ static void python_task(void *arg)
         python_http_stream_destroy();
         python_http_session_destroy();
 #endif
+        solar_os_rtc_release_owner("python");
         mp_embed_deinit();
         python_app.vm_active = false;
     }
@@ -8288,6 +8602,9 @@ static void python_stop(solar_os_context_t *ctx)
 #if SOLAR_OS_PACKAGE_SERVICE_MIDI
     python_midi_destroy();
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_BLE
+    python_ble_destroy();
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_NET
     python_net_destroy();
 #endif
@@ -8450,6 +8767,13 @@ static void python_apply_gfx_event(solar_os_context_t *ctx, const python_event_t
     case PYTHON_EVENT_GFX_FILL_CIRCLE:
         solar_os_gfx_fill_circle(gfx, (int)event->x0, (int)event->y0, (int)event->width);
         break;
+    case PYTHON_EVENT_GFX_ICON:
+        solar_os_gfx_icon(gfx,
+                          (int)event->x0,
+                          (int)event->y0,
+                          (solar_os_gfx_icon_t)event->attr,
+                          (solar_os_gfx_icon_size_t)event->width);
+        break;
     case PYTHON_EVENT_GFX_BITMAP:
         solar_os_gfx_bitmap(gfx,
                             (int)event->x0,
@@ -8536,6 +8860,7 @@ static void python_drain_events(solar_os_context_t *ctx)
         case PYTHON_EVENT_GFX_FILL_RECT:
         case PYTHON_EVENT_GFX_CIRCLE:
         case PYTHON_EVENT_GFX_FILL_CIRCLE:
+        case PYTHON_EVENT_GFX_ICON:
         case PYTHON_EVENT_GFX_BITMAP:
         case PYTHON_EVENT_GFX_TEXT:
             python_apply_gfx_event(ctx, &event);

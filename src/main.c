@@ -52,6 +52,8 @@
 #include "solar_os_ft6336.h"
 #endif
 #include "solar_os_radio.h"
+#include "solar_os_rtc.h"
+#include "solar_os_schedule.h"
 #include "solar_os_sessions.h"
 #include "solar_os_shell.h"
 #include "solar_os_scheduler.h"
@@ -99,6 +101,7 @@
 #define RUNTIME_CADENCE_LOG_INTERVAL_MS 60000U
 #define SESSION_OVERLAY_TITLE_MAX 48
 #define SESSION_OVERLAY_MS 900
+#define SLEEP_REASON_MAX 32
 
 static const char *TAG = "solar_os";
 
@@ -129,6 +132,8 @@ static bool key_interrupt_ready;
 static bool key_pressed;
 static bool key_long_press_fired;
 static bool key_ignore_until_released;
+static bool deferred_sleep_pending;
+static char deferred_sleep_reason[SLEEP_REASON_MAX];
 static uint32_t key_pressed_ms;
 static uint32_t last_app_tick_ms;
 static uint32_t last_status_update_ms;
@@ -141,6 +146,7 @@ static uint8_t session_switch_nav_held;
 static solar_os_runtime_loop_stats_t runtime_loop_stats;
 
 static void process_app_requests(void);
+static void maybe_enter_deferred_sleep(void);
 static void maybe_enter_idle_sleep(void);
 static void update_status(void);
 
@@ -698,13 +704,57 @@ static void enter_light_sleep(const char *reason)
         return;
     }
 
-    err = esp_sleep_enable_ext1_wakeup_io(KEY_WAKE_MASK, KEY_WAKE_MODE);
+    uint64_t wake_mask = KEY_WAKE_MASK;
+    int rtc_wake_gpio = SOLAR_OS_RTC_INTERRUPT_GPIO_NONE;
+    solar_os_rtc_info_t rtc_info;
+    if (solar_os_rtc_get_info(&rtc_info) == ESP_OK &&
+        rtc_info.interrupt_gpio >= 0 && rtc_info.interrupt_gpio < 64 &&
+        rtc_info.interrupt_active_level == SOLAR_OS_BOARD_KEY_ACTIVE_LEVEL
+#if CONFIG_IDF_TARGET_ESP32
+        /* Classic ESP32 only supports ALL_LOW, which cannot combine two
+         * independent active-low wake inputs. */
+        && rtc_info.interrupt_active_level != 0
+#endif
+        ) {
+        rtc_wake_gpio = rtc_info.interrupt_gpio;
+        const gpio_num_t gpio = (gpio_num_t)rtc_wake_gpio;
+        const esp_err_t rtc_gpio_err = rtc_gpio_init(gpio);
+        if (rtc_gpio_err == ESP_OK) {
+            (void)rtc_gpio_set_direction(gpio, RTC_GPIO_MODE_INPUT_ONLY);
+            if (rtc_info.interrupt_active_level == 0) {
+                (void)rtc_gpio_pullup_en(gpio);
+                (void)rtc_gpio_pulldown_dis(gpio);
+            } else {
+                (void)rtc_gpio_pulldown_en(gpio);
+                (void)rtc_gpio_pullup_dis(gpio);
+            }
+            wake_mask |= 1ULL << rtc_wake_gpio;
+        } else {
+            rtc_wake_gpio = SOLAR_OS_RTC_INTERRUPT_GPIO_NONE;
+            SOLAR_OS_LOGW(TAG, "RTC interrupt wake GPIO setup failed: %s",
+                          esp_err_to_name(rtc_gpio_err));
+        }
+    }
+
+    err = esp_sleep_enable_ext1_wakeup_io(wake_mask, KEY_WAKE_MODE);
     if (err != ESP_OK) {
         SOLAR_OS_LOGW(TAG, "KEY sleep source setup failed: %s", esp_err_to_name(err));
+        if (rtc_wake_gpio != SOLAR_OS_RTC_INTERRUPT_GPIO_NONE) {
+            (void)rtc_gpio_deinit((gpio_num_t)rtc_wake_gpio);
+        }
         (void)esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_AUTO);
         key_restore_gpio_after_rtc();
         (void)solar_os_power_end_explicit_sleep();
         return;
+    }
+
+    uint64_t schedule_wake_us = 0;
+    if (solar_os_schedule_next_wake_us(&schedule_wake_us)) {
+        const esp_err_t timer_err = esp_sleep_enable_timer_wakeup(schedule_wake_us);
+        if (timer_err != ESP_OK) {
+            SOLAR_OS_LOGW(TAG, "schedule timer wake setup failed: %s",
+                          esp_err_to_name(timer_err));
+        }
     }
 
 #if SOLAR_OS_PACKAGE_SERVICE_BLE
@@ -712,9 +762,26 @@ static void enter_light_sleep(const char *reason)
         const esp_err_t ble_sleep_err =
             solar_os_ble_keyboard_prepare_sleep(BLE_SLEEP_DISCONNECT_TIMEOUT_MS);
         if (ble_sleep_err != ESP_OK) {
-            SOLAR_OS_LOGW(TAG,
-                          "BLE keyboard sleep prepare failed: %s",
-                          esp_err_to_name(ble_sleep_err));
+            if (ble_sleep_err == ESP_ERR_NOT_FINISHED) {
+                deferred_sleep_pending = true;
+                strlcpy(deferred_sleep_reason,
+                        reason != NULL ? reason : "deferred sleep",
+                        sizeof(deferred_sleep_reason));
+                SOLAR_OS_LOGI(TAG,
+                              "BLE keyboard reconnect is stopping; sleep deferred");
+            } else {
+                SOLAR_OS_LOGW(TAG,
+                              "BLE keyboard sleep prepare failed, cancelling sleep: %s",
+                              esp_err_to_name(ble_sleep_err));
+            }
+            (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+            if (rtc_wake_gpio != SOLAR_OS_RTC_INTERRUPT_GPIO_NONE) {
+                (void)rtc_gpio_deinit((gpio_num_t)rtc_wake_gpio);
+            }
+            (void)esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_AUTO);
+            key_restore_gpio_after_rtc();
+            (void)solar_os_power_end_explicit_sleep();
+            return;
         }
     }
 #endif
@@ -753,8 +820,11 @@ static void enter_light_sleep(const char *reason)
 
     const esp_sleep_wakeup_cause_t wake_cause = esp_sleep_get_wakeup_cause();
     const uint64_t wake_ext1 = esp_sleep_get_ext1_wakeup_status();
-    (void)esp_sleep_disable_ext1_wakeup_io(KEY_WAKE_MASK);
+    (void)esp_sleep_disable_ext1_wakeup_io(wake_mask);
     (void)esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_AUTO);
+    if (rtc_wake_gpio != SOLAR_OS_RTC_INTERRUPT_GPIO_NONE) {
+        (void)rtc_gpio_deinit((gpio_num_t)rtc_wake_gpio);
+    }
     key_restore_gpio_after_rtc();
 
     const uint32_t now_ms = millis_u32();
@@ -817,6 +887,27 @@ static void enter_light_sleep(const char *reason)
 
     update_status();
     resume_display_after_sleep(now_ms);
+}
+
+static void maybe_enter_deferred_sleep(void)
+{
+    if (!deferred_sleep_pending) {
+        return;
+    }
+
+#if SOLAR_OS_PACKAGE_SERVICE_BLE
+    if (board_has(SOLAR_OS_BOARD_CAP_BLE) &&
+        !solar_os_ble_keyboard_sleep_prepare_ready()) {
+        return;
+    }
+#endif
+
+    char reason[SLEEP_REASON_MAX];
+    strlcpy(reason, deferred_sleep_reason, sizeof(reason));
+    deferred_sleep_pending = false;
+    deferred_sleep_reason[0] = '\0';
+    SOLAR_OS_LOGI(TAG, "%s: deferred sleep is ready", reason);
+    enter_light_sleep(reason);
 }
 
 static void handle_key_short_press(void)
@@ -922,7 +1013,7 @@ static void poll_key_button(void)
         update_status();
         draw_terminal_if_needed();
         if (forget_err == ESP_OK && pairing_err == ESP_OK) {
-            SOLAR_OS_LOGI(TAG, "KEY long press: BLE keyboard forgotten, pairing started");
+            SOLAR_OS_LOGI(TAG, "KEY long press: BLE keyboard forget and pairing requested");
         }
         if (forget_err != ESP_OK) {
             SOLAR_OS_LOGW(TAG,
@@ -1120,7 +1211,11 @@ static void dispatch_input_key(const solar_os_input_key_event_t *event)
         return;
     }
 
-    if ((event->modifiers & SOLAR_OS_INPUT_MOD_LEFT_ALT) != 0 &&
+    const bool tui_fullscreen_altgr =
+        (event->modifiers & SOLAR_OS_INPUT_MOD_RIGHT_ALT) != 0 &&
+        (event->key == SOLAR_OS_KEY_ENTER || event->key == '\r');
+    if (((event->modifiers & SOLAR_OS_INPUT_MOD_LEFT_ALT) != 0 ||
+         tui_fullscreen_altgr) &&
         event->key != SOLAR_OS_KEY_APP_EXIT) {
         const char prefix = (char)SOLAR_OS_KEY_ALT_PREFIX;
         dispatch_input_chars(&prefix, 1);
@@ -1347,7 +1442,9 @@ static void update_status(void)
 
 #if SOLAR_OS_PACKAGE_SERVICE_BLE
     if (board_has(SOLAR_OS_BOARD_CAP_BLE)) {
-        status.keyboard_scanning = solar_os_ble_keyboard_is_scanning();
+        status.bluetooth_supported = true;
+        status.bluetooth_enabled = solar_os_ble_keyboard_enabled_for_current_boot();
+        status.bluetooth_scanning = solar_os_ble_keyboard_is_scanning();
     }
 #endif
     const size_t keyboard_count = solar_os_input_keyboard_count();
@@ -1425,6 +1522,7 @@ static void process_app_requests(void)
 static void maybe_enter_idle_sleep(void)
 {
     if (!board_has(SOLAR_OS_BOARD_CAP_KEY) ||
+        deferred_sleep_pending ||
         !solar_os_sessions_foreground_is_shell() ||
         key_pressed ||
         key_ignore_until_released) {
@@ -1447,8 +1545,13 @@ static void start_headless_shell_if_needed(void)
         solar_os_board_capability_t capability;
         const char *port_name;
     } fallback_ports[] = {
+#if SOLAR_OS_BOARD_HEADLESS_PREFER_CDC
+        {SOLAR_OS_BOARD_CAP_CDC, SOLAR_OS_CDC_PORT_NAME},
+        {SOLAR_OS_BOARD_CAP_UART, SOLAR_OS_UART_PORT_NAME},
+#else
         {SOLAR_OS_BOARD_CAP_UART, SOLAR_OS_UART_PORT_NAME},
         {SOLAR_OS_BOARD_CAP_CDC, SOLAR_OS_CDC_PORT_NAME},
+#endif
     };
 
     bool had_candidate = false;
@@ -1581,6 +1684,8 @@ void app_main(void)
 
     ESP_LOGI(TAG, "boot milestone: starting peripherals");
     solar_os_boot_services_init(millis_u32());
+    ESP_ERROR_CHECK(solar_os_schedule_init());
+    solar_os_schedule_set_script_runner(solar_os_shell_run_background_script);
 #if SOLAR_OS_BOARD_HAS_DISPLAY
     if (display_u8g2 != NULL) {
         const esp_err_t display_runtime_err =
@@ -1620,12 +1725,14 @@ void app_main(void)
                   requires_fast_poll ? "polled" : "event-driven");
 
     while (true) {
+        solar_os_schedule_poll();
         solar_os_power_poll();
         poll_key_button();
         dispatch_input_sources();
         dispatch_app_tick();
         dispatch_input_sources();
         process_app_requests();
+        maybe_enter_deferred_sleep();
         update_status();
 
         draw_terminal_if_needed();

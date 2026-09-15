@@ -44,6 +44,7 @@ The source and generated paths are:
 boards/manifests/<target>.toml                 source board profile
 boards/expansion_drivers.toml                  selectable driver catalog
 scripts/board_config.py                        desktop TUI
+scripts/os_builder.py                          flavor build/flash TUI
 scripts/generate_board_profile.py              manifest validator/compiler
 .pio/build/<env>/generated/solar_os/            generated CMake and C metadata
 ```
@@ -168,17 +169,18 @@ The current tree includes these board targets:
 
 | Target | PlatformIO env | Hardware | Highlights |
 | --- | --- | --- | --- |
-| `waveshare_esp32_s3_rlcd_4_2` | `waveshare_esp32_s3_rlcd_4_2` | Waveshare ESP32-S3-RLCD-4.2 | Primary ST7305 reflective display target with SDMMC, CDC, UART, RTC, SHTC3, battery ADC, ES8311/ES7210 audio, expansion I2C/SPI/UART/GPIO/ADC/PWM, and runtime-routable SPI3 on GPIO1/GPIO2/GPIO3/GPIO17. |
+| `solar_term` | `solar_term` | [SolarTerm](https://github.com/nilseuropa/solar_term), built from the Waveshare ESP32-S3-RLCD-4.2 | Primary ST7305 reflective display target with SDMMC, CDC, UART, RTC, SHTC3, battery ADC, ES8311/ES7210 audio, expansion I2C/SPI/UART/GPIO/ADC/PWM, and runtime-routable SPI3 on GPIO1/GPIO2/GPIO3/GPIO17. SolarOS refers to this hardware configuration as SolarTerm. |
 | `freenove_esp32_s3_display_4_0` | `freenove_esp32_s3_display_4_0` | Freenove ESP32-S3 Display 4.0-inch (FNK0104S) | Integrated 480x320 ST7796 display, FT6336 capacitive pointer, ES8311 speaker and microphone, four-bit SDMMC, battery ADC, native USB CDC, and UART/I2C/GPIO expansion connectors. |
-| `freenove_esp32_s3_display_4_0` | `freenove_esp32_s3_display_4_0` | Freenove ESP32-S3 Display 4.0-inch (FNK0104S) | ... || 
 | `sensecap_d1l` | `sensecap_d1l` | Seeed Studio SenseCAP Indicator D1L | ESP32-S3 target with a 480x480 ST7701S RGB-parallel display, FT6336U capacitive touch gated through a TCA9535 IO expander, Wi-Fi, BLE, and expansion I2C/UART/GPIO/PWM. SD storage and Grove-port keyboard input are bridged through an RP2040 co-processor over UART, not yet implemented for this board. |
-|`elecrow_crowpanel_esp32_s3_4_2_epaper` | `elecrow_crowpanel_esp32_s3_4_2_epaper` | Elecrow CrowPanel ESP32-S3 4.2-inch E-paper | ESP32-S3-WROOM-1-N8R8 target with a 400x300 SSD1683 e-paper display, microSD over SDSPI, CH340C/UART console, rotary/menu/exit controls, status LED, Wi-Fi, BLE, and expansion I2C/SPI/UART/1-Wire/GPIO/ADC/PWM. |
+| `elecrow_crowpanel_esp32_s3_4_2_epaper` | `elecrow_crowpanel_esp32_s3_4_2_epaper` | Elecrow CrowPanel ESP32-S3 4.2-inch E-paper | ESP32-S3-WROOM-1-N8R8 target with a 400x300 SSD1683 e-paper display, microSD over SDSPI, CH340C/UART console, rotary/menu/exit controls, status LED, Wi-Fi, BLE, and expansion I2C/SPI/UART/1-Wire/GPIO/ADC/PWM. |
+| `cl_32` | `cl_32` | CL-32 | ESP32-S3-WROOM-1-N16R8 target with a 384x168 ST7305 reflective LCD, an ATmega808-backed keyboard and battery monitor, native USB CDC, UART, microSD over SDSPI, PCF85063 RTC, onboard PWM buzzer, Wi-Fi, BLE, and expansion I2C/SPI/UART/GPIO/ADC/PWM/I2S. |
 | `odroid_go` | `odroid_go` | Hardkernel ODROID-GO | Classic ESP32 target with ILI9341 display, SD over VSPI/SDSPI, battery ADC, ESP32 DAC speaker, buttons, ADC D-pad, status LED, display brightness, expansion SPI/UART/GPIO/PWM, and runtime GPIO4/GPIO15. |
 | `freenove_esp32_wrover_v3` | `freenove_esp32_wrover_v3` | Freenove ESP32-WROVER v3.0 (FNK0060) | Classic ESP32 target with 8 MB PSRAM, CH340/UART console, one-bit SDMMC, Wi-Fi, BLE, a GPIO0 BOOT/KEY button, and a 384x288 monochrome PAL composite display on GPIO25. |
 | `ttgo_vga32_v14` | `ttgo_vga32_v14` | LilyGO TTGO VGA32 v1.4 | ESP32-PICO-D4 desktop target with 8 MB external PSRAM, build-selectable 320x200@70Hz, 320x240@60Hz, 640x400@70Hz, or 640x480@60Hz VGA output through the onboard RGB222 resistor DAC, GPIO25 mono DAC audio, a default-attached PS/2 keyboard, v1.4 microSD wiring over HSPI, USB-UART, Wi-Fi, BLE disabled by default, and two input-only expansion GPIOs. |
 | `esp32_s3_devkitc1_n16r8` | `esp32_s3_devkitc1_n16r8` | Espressif ESP32-S3-DevKitC-1-N16R8 | Headless ESP32-S3 target with CDC, UART, Wi-Fi, BLE, a GPIO0 BOOT/KEY button, expansion I2C/SPI/UART/GPIO/ADC/PWM, graphics through attachable display targets, and no primary display or onboard sensors. |
 | `esp32_devkitc_v4_wrover` | `esp32_devkitc_v4_wrover` | Espressif ESP32-DevKitC V4 with ESP32-WROVER-E | Headless classic ESP32 target with PSRAM, UART, Wi-Fi, BLE, a GPIO0 BOOT/KEY button, expansion I2C/SPI/UART/GPIO/ADC/PWM/I2S, graphics through attachable display targets, and no built-in peripherals. |
 | `devkitc1_epaper_workbench` | `esp32_s3_devkitc1_n16r8` with `SOLAR_OS_BOARD=devkitc1_epaper_workbench` | ESP32-S3 DevKitC-1 E-paper Workbench | Manifest-generated development target with fixed CardKB, 400x300 SSD1683 display, and SDSPI storage attachments. |
+| `t_lora_pager` | `t_lora_pager` | LilyGO T-LoRa-Pager (SX1262) | ESP32-S3-WROOM-1-N16R8 target with a 480x222 ST7796 display, a TCA8418 4x10 matrix keyboard, an SX1262 LoRa radio, PCF85063 RTC, microSD over SDSPI, ES8311 audio, a BQ27220 battery gauge, a rotary encoder, an XL9555 I2C GPIO expander that power-sequences the keyboard/radio/SD rails, native USB CDC, Wi-Fi, BLE, and expansion I2C/SPI/UART/GPIO/ADC/PWM. GNSS, NFC, IMU, haptic, and BQ25896 charger controls are not available. |
 
 ## Generated Build Interface
 
@@ -469,6 +471,34 @@ board = odroid_esp32
 board_build.cmake_extra_args = -DSOLAR_OS_BOARD=odroid_go -DSDKCONFIG_DEFAULTS=sdkconfig.defaults.odroid_go
 ```
 
+## Update Layouts
+
+`os_builder` selects an update layout after board selection. This choice fixes
+the partition table and application-image limit; internal storage size is not a
+separate user setting.
+
+| Flash | OTA updates | Serial updates |
+| --- | --- | --- |
+| 16 MiB | Two 0x700000-byte (7 MiB) app slots and 0x1F0000 bytes of internal storage | One 0xE00000-byte (14 MiB) app slot and 0x1F0000 bytes of internal storage |
+| 8 MiB | Two 0x3E0000-byte (3.875 MiB) app slots and 0x20000 bytes (128 KiB) of internal storage | One 0x700000-byte (7 MiB) app slot and 0xF0000 bytes (960 KiB) of internal storage |
+| 4 MiB | Not available | One 0x3D0000-byte app slot and 0x20000 bytes (128 KiB) of internal storage |
+
+The OTA layout also includes the internal OTA service and its dependencies.
+The service is not a flavor group. The serial layout does not add it, although
+another selected feature can still depend on the shared OTA implementation.
+Changing layouts changes the partition table, so install the first image for a
+new layout through serial flashing. Do not switch a deployed device's layout
+with an ordinary OTA update.
+
+For a direct PlatformIO build outside `os_builder`, set `SOLAR_OS_LAYOUT`:
+
+```sh
+SOLAR_OS_LAYOUT=single pio run -e solar_term
+```
+
+If it is omitted, 8 MiB and 16 MiB environments use the OTA layout and 4 MiB
+environments use their fixed serial layout.
+
 ## Freenove ESP32-WROVER v3.0
 
 The `freenove_esp32_wrover_v3` target covers the FNK0060 v3.0 board with an
@@ -512,33 +542,29 @@ Omit `SOLAR_OS_CVBS_MODE` (or set it to `384x288`) to build the default full
 PAL mode. Composite scanout requires the ESP32's full 240 MHz clock, so SolarOS
 clamps all power profiles to that board-specific CPU floor on this target.
 
-Use the focused `rover-gameboy` flavor for Game Boy. It enables the `games`
-group but leaves Invaders out so the image fits the board's 4 MB flash. The
-default full PAL mode gives Game Boy the largest image:
+Use `os_builder` with the `rover` baseline to make a specialized Game Boy or
+Synth image. Add the required group, remove unrelated groups until the measured
+image fits, then build and flash from the same TUI:
 
 ```sh
-SOLAR_OS_FLAVOR=rover-gameboy pio run -e freenove_esp32_wrover_v3
+python3 scripts/os_builder.py \
+  --input flavors/rover.toml \
+  --board freenove_esp32_wrover_v3 \
+  --layout single
 ```
 
-The 320x200 safe-area mode also supports Game Boy; its presenter selects a
-smaller centered raster. For serial diagnostics, run:
+The default full PAL mode gives Game Boy the largest image. The 320x200
+safe-area mode also supports Game Boy; its presenter selects a smaller centered
+raster. For serial diagnostics, run:
 
 ```text
 job start log uart0 debug
 ```
 
-It is silent because composite scanout owns I2S0.
-
-For the focused Synth build, use:
-
-```sh
-SOLAR_OS_FLAVOR=rover-synth pio run -e freenove_esp32_wrover_v3
-```
-
-`rover-synth` keeps BLE and PS/2 keyboard input, MIDI, controls, storage, and
-basic file tools. It omits Wi-Fi/networking and unrelated application stacks
-to retain classic-ESP32 internal memory for Bluetooth and real-time audio.
-Attach an LEDC PWM audio output at runtime because PAL scanout owns I2S0:
+It is silent because composite scanout owns I2S0. For a custom Synth image,
+retain BLE, MIDI, controls, storage, basic file tools, Synth, and the PWM audio
+driver while removing unrelated stacks. Attach an LEDC PWM audio output at
+runtime because PAL scanout owns I2S0:
 
 ```text
 expansion attach audio-pwm audio pwm=gpio26
@@ -558,10 +584,9 @@ PWM and can form runtime I2C, SPI, UART, or 1-Wire buses. UART0 remains
 registered on the CH340 pins and cannot be detached by the shell using it.
 
 The board uses `partitions_4mb.csv`, with one 0x3D0000-byte factory application
-slot and a 0x20000-byte (128 KiB) flash filesystem. The board-specific `rover`,
-`rover-gameboy`, `rover-python`, `rover-lua`, and `rover-synth` flavors do not use
-a dual-OTA layout on 4 MB flash. Install firmware through the CH340 serial
-connection; this partition layout does not support on-device OTA updates.
+slot and a 0x20000-byte (128 KiB) flash filesystem. A dual-OTA layout is not
+available on 4 MB flash. Install firmware through the CH340 serial connection;
+this partition layout does not support on-device OTA updates.
 
 ## LilyGO TTGO VGA32 v1.4
 
@@ -611,11 +636,15 @@ The board has 4 MB flash, so its PlatformIO environment defaults to the focused
 pio run -e ttgo_vga32_v14
 ```
 
-To include Game Boy instead, use the same compact game profile as the PAL
-target. It omits Invaders and unrelated application groups:
+To create a compact Game Boy or another specialized build, start from `rover`
+in `os_builder`, adjust the granular groups, and build against this board's
+single-image limit:
 
 ```sh
-SOLAR_OS_FLAVOR=rover-gameboy pio run -e ttgo_vga32_v14
+python3 scripts/os_builder.py \
+  --input flavors/rover.toml \
+  --board ttgo_vga32_v14 \
+  --layout single
 ```
 
 The board profile declares `ps2kbd0` and creates the default `keyboard0`
@@ -720,7 +749,7 @@ pio run -e freenove_esp32_s3_display_4_0
 The built-in `elecrow_crowpanel_esp32_s3_4_2_epaper` target covers Elecrow's
 V1.0 400x300 monochrome CrowPanel. It uses an ESP32-S3-WROOM-1-N8R8 module,
 the SSD1683 e-paper driver, microSD over a dedicated SDSPI bus, five digital
-controls, a status LED, Wi-Fi, BLE, and an 8 MB dual-OTA partition layout.
+controls, a status LED, Wi-Fi, BLE, and selectable OTA or serial-update layouts.
 
 Elecrow has shipped both the original panel and a newer panel identified by a
 green circular sticker on the back. The newer revision keeps the same GPIO
@@ -765,8 +794,10 @@ The panel and storage wiring remains internal board wiring:
   SD-power enable.
 - GPIO41: active-high status LED.
 
-The target uses `partitions_8mb.csv`, with two 0x3B0000-byte OTA application
-slots and a 0x90000-byte flash filesystem partition.
+The default OTA layout uses `partitions_8mb.csv`, with two 0x3E0000-byte OTA
+application slots and a 0x20000-byte flash filesystem partition. The serial
+layout uses `partitions_8mb_single.csv`, with one 0x700000-byte factory slot and
+a 0xF0000-byte flash filesystem partition.
 
 ## Headless Boards
 
@@ -801,9 +832,10 @@ Its active-low BOOT button on GPIO0 is also the SolarOS KEY for the configured
 short-press sleep/suspend action, light-sleep wake, and long-press BLE keyboard
 replacement. GPIO0 remains reserved from runtime routing. Do not hold the
 button during reset or power-up, because that selects download boot mode.
-The N16R8 target uses the common 16 MiB `partitions.csv` layout described
-above. Its internal volume supports durable agent conversations and normal
-file workflows without an SD card.
+The N16R8 target defaults to the common 16 MiB OTA `partitions.csv` layout. Its
+serial alternative uses `partitions_16mb_single.csv`. Both retain the same
+0x1F0000-byte internal volume for durable agent conversations and normal file
+workflows without an SD card.
 The board also permits runtime routing on the spare SPI3 host. Static `spi0`
 remains the usual choice; the runtime host is useful for isolated experiments
 on another set of routable expansion pins.
@@ -871,6 +903,14 @@ require a ready named display target at runtime.
 
 The board header then provides metadata and pins. The built-in Waveshare target
 uses the ST7305 reflective LCD driver:
+
+`SOLAR_OS_BOARD_DISPLAY_WIDTH` and `SOLAR_OS_BOARD_DISPLAY_HEIGHT` always
+describe the logical SolarOS drawing area after rotation. A controller driver
+that needs the unrotated panel address space uses
+`SOLAR_OS_BOARD_DISPLAY_NATIVE_WIDTH` and
+`SOLAR_OS_BOARD_DISPLAY_NATIVE_HEIGHT` separately. Display targets register
+the dimensions of their initialized U8g2 logical coordinate space; registration
+rejects a target whose advertised dimensions disagree with that space.
 
 ```c
 #define SOLAR_OS_BOARD_DISPLAY_CONTROLLER "ST7305"
@@ -993,6 +1033,18 @@ shared storage adapter enables that rail before probing or mounting the card.
 RTC, sensor, battery, and audio devices follow the same rule. See the Waveshare
 manifest for PCF85063, SHTC3, battery ADC, and ES8311/ES7210 examples. See the
 ODROID-GO manifest for ESP32 DAC output and amplifier-enable bindings.
+The Waveshare PCF85063 interrupt is a fixed optional device binding on GPIO15;
+other PCF85063 attachments can omit it when the interrupt output is not wired.
+
+RTC chip adapters register with the generic RTC service. That service presents
+their clock/calendar operations to the shared time service and retains generic
+RTC topology such as an optional interrupt GPIO. Providers advertise optional
+alarm, countdown, and interrupt-status operations; an RTC that only keeps time
+remains a valid provider. The PCF85063 adapter implements all three optional
+operations. Countdown periods from 1 to 255 seconds are supported directly;
+longer exact-minute periods are supported through 4 hours 15 minutes. Power,
+alarm, shell, and script features must use the RTC service rather than including
+a concrete RTC driver.
 
 The runtime path follows the same pattern as display:
 
@@ -1020,7 +1072,7 @@ Before committing a new board target:
 2. Rebuild the Waveshare environment to catch shared regressions:
 
    ```sh
-   pio run -e waveshare_esp32_s3_rlcd_4_2
+   pio run -e solar_term
    ```
 
    For changes touching ESP32 classic support, ILI9341 display, SD-SPI,

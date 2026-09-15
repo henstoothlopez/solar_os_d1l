@@ -3,8 +3,8 @@ id = "expansion"
 title = "Expansion drivers and attached devices"
 section = "hardware"
 summary = "Discover, attach, and detach package-gated expansion devices"
-aliases = ["devices", "drivers", "ssd1683", "epaper", "e-paper", "st7305", "ili9341", "st7796", "cvbs", "pal", "vga32", "cardkb", "keyboard", "sdmmc", "sdspi", "micro-sd", "audio-pwm", "ledc-audio", "pcm5102", "pcm5102a", "i2s-dac", "es8311", "es7210", "esp32-dac", "rfm69", "rfm69h", "rfm95", "neopixel", "ws2812", "lora", "fsk", "gfsk", "msk", "gmsk", "ook"]
-keywords = "python lua expansion device driver attach detach bindings display epaper e-paper ssd1683 st7305 ili9341 st7796 cvbs pal composite vga vga32 waveshare cardkb m5stack keyboard mouse joystick pointer input i2c sd sdmmc sdspi microsd storage oled lcd sensor peripheral audio pwm ledc pcm5102 es8311 es7210 esp32 dac i2s radio rfm69 rfm69h rfm95 neopixel ws2812 rgb led strip fsk gfsk msk gmsk ook lora"
+aliases = ["devices", "drivers", "ssd1683", "epaper", "e-paper", "st7305", "ili9341", "st7796", "cvbs", "pal", "vga32", "cardkb", "keyboard", "tca8418", "rotary-encoder", "sdmmc", "sdspi", "micro-sd", "audio-pwm", "ledc-audio", "pcm1808", "i2s-adc", "pcm5102", "pcm5102a", "i2s-dac", "es8311", "es7210", "esp32-dac", "rfm69", "rfm69h", "rfm95", "sx1262", "bq27220", "neopixel", "ws2812", "lora", "fsk", "gfsk", "msk", "gmsk", "ook"]
+keywords = "python lua expansion device driver category attach detach bindings display epaper e-paper ssd1683 st7305 ili9341 st7796 cvbs pal composite vga vga32 waveshare cardkb m5stack keyboard tca8418 rotary encoder quadrature mouse joystick pointer input i2c sd sdmmc sdspi microsd storage oled lcd sensor peripheral battery fuel gauge bq27220 audio pwm ledc pcm1808 adc pcm5102 es8311 es7210 esp32 dac i2s radio rfm69 rfm69h rfm95 sx1262 neopixel ws2812 rgb led strip fsk gfsk msk gmsk ook lora"
 packages_any = ["service_expansion"]
 +++
 # Expansion drivers and attached devices
@@ -20,9 +20,12 @@ an `ft6336` attachment; Waveshare `rtc0` and `environment0` use `pcf85063` and
 `shtc3`; and the supported battery boards expose `battery0` through
 `battery-adc`. TTGO VGA32 `keyboard0` is a `ps2-keyboard` attachment. Built-in
 audio also appears as `audio0`: Waveshare uses `es8311-es7210`, Freenove uses
-`es8311-duplex`, and classic ESP32 audio boards use `esp32-dac`. Generic input,
-time, sensor, battery, and audio services consume the same runtime providers
-whether the attachment came from the board profile or the shell.
+`es8311-duplex`, and classic ESP32 audio boards use `esp32-dac`. CL-32 declares
+its integrated AVR as fixed `core0`; its polled event FIFO supplies the
+`keyboard0` input source and its voltage and power-status registers supply
+`battery0`. Generic input, time, sensor, battery, and audio services consume the
+same runtime providers whether the attachment came from the board profile or
+the shell.
 
 Built-in displays follow the same rule and appear as fixed `display0`
 attachments: Waveshare uses `st7305`, Freenove uses `st7796`, ODROID-GO uses
@@ -42,15 +45,27 @@ backend and the `midi` background job owns the connection while it runs.
 ## Discover what is present
 
 ```text
+expansion
+expansion status
 expansion drivers
 expansion devices
 display list
 ```
 
-`expansion drivers` uses compact aligned columns for the compiled driver name,
-probe support, bus type, and summary. `expansion devices` prints each attached
-device in a separate block, with its name in bold followed by origin, readiness,
-startup mode, attachment policy, and bindings.
+`expansion` opens the device manager. Its Devices view lists current
+attachments and opens their details; detachable runtime devices can be removed
+after confirmation. Its Drivers view groups drivers by category and opens an
+attachment form for drivers supported by the running board. Binding forms use
+existing named buses; create, attach, detach, or remove buses in the `io` app.
+`expansion status` retains the textual capabilities, buses, devices, and claims
+report for scripts and terminal inspection.
+
+`expansion drivers` groups compiled drivers under bold Audio, Display, Input,
+Power, Radio, Sensor, Storage, and Utility headings, with driver names sorted
+inside each category. Its aligned rows also show probe support, bus type, and
+the driver summary. `expansion devices` prints each attached device in a
+separate block, with its name in bold followed by origin, readiness, startup
+mode, attachment policy, and bindings.
 
 From a script, inspect `solaros.expansion.drivers()` and
 `solaros.expansion.devices()`. A driver existing in firmware does not mean a
@@ -117,6 +132,13 @@ expansion detach environment0
 expansion detach rtc0
 ```
 
+The PCF85063 `irq=<gpio>` binding is optional. The Waveshare board profile
+reserves its routed RTC interrupt on GPIO15; external modules can omit `irq`
+when only clock and calendar access is required.
+The generic RTC service discovers alarm, countdown, and interrupt-status
+support from the attached chip adapter, so applications do not depend on the
+PCF85063 register interface.
+
 `battery-adc` takes an ADC pin and a divider ratio in thousandths. For a 2:1
 resistive divider, use `divider=2000`:
 
@@ -133,6 +155,7 @@ Other input devices follow the same lifecycle:
 
 ```text
 expansion attach gpio-keys keys0 key:UP=gpio17 key:ENTER=gpio2
+expansion attach rotary-encoder wheel0 a=gpio17 b=gpio2
 expansion bus create ps2 ps2mouse clock=gpio17 data=gpio18
 expansion attach ps2-mouse mouse0 ps2=ps2mouse
 expansion attach analog-joystick joystick0 x=adc2 y=adc4 min=0 center=1650 max=3300 deadzone=100
@@ -140,8 +163,10 @@ input status
 ```
 
 Use only bindings listed by `expansion drivers` and resources shown on the
-running board. A PS/2 mouse publishes relative pointer events. An analog
-joystick consumes two scalar streams and publishes axes, never keys.
+running board. A rotary encoder decodes interrupts from its quadrature A/B
+signals and publishes Up/Down detents; wire its independent push switch through
+`gpio-keys`. A PS/2 mouse publishes relative pointer events. An analog joystick
+consumes two scalar streams and publishes axes, never keys.
 Foreground Python and Lua applications receive those pointer and axis events
 through `solaros.input`; use `solaros.tui.getch()` for keyboard characters.
 
@@ -249,6 +274,28 @@ duplicated to both channels and device volume is applied in software. Current
 dual-I2S boards use I2S1, leaving onboard audio or composite video on I2S0.
 PCM5102A modules provide line-level output; connect an amplifier or powered
 input rather than a passive speaker.
+
+A PCM1808 module uses four runtime-safe GPIOs and appears as a stereo capture
+device:
+
+```text
+expansion attach pcm1808 adc0 mclk=gpio1 bck=gpio2 ws=gpio3 dout=gpio17
+audio devices
+arecord -d 5 -i adc0.capture /sdcard/pcm1808.wav
+expansion detach adc0
+```
+
+The example consumes every runtime-safe GPIO on the Waveshare expansion
+header. Before applying power, configure the module for slave I2S mode:
+`MD1=0`, `MD0=0`, and `FMT=0`. Connect `MCLK` to the module's `SCKI` or `SCK`
+pin, `WS` to `LRCK`, and `DOUT` to `DOUT`. The driver supplies a 4.096 MHz
+system clock and 64 BCK cycles per 16 kHz stereo frame, receives the PCM1808's
+24-bit samples, and registers `adc0.capture` as an exclusive signed 16-bit PCM
+source. Use the module-rated supply and a common ground; raw PCM1808 circuits
+need separate analog and digital supplies as specified by the manufacturer.
+On modules that expose both rails, connect `+5V` for the analog supply and
+`3.3V` for the digital supply; powering only `3.3V` leaves the converter's
+analog section unpowered.
 
 The integrated codec and classic ESP32 DAC backends are also attachable when
 the target MCU and board resources support them. Codec attachments need a

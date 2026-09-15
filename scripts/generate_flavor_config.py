@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import sys
 import tomllib
 
@@ -27,6 +28,9 @@ class PackageDef:
 
 @dataclass(frozen=True)
 class GroupDef:
+    label: str
+    category: str
+    hidden: bool
     immutable: bool
     members: tuple[str, ...]
     triggers: tuple[str, ...]
@@ -219,9 +223,12 @@ def load_catalog(path: Path) -> PackageCatalog:
             raise ValueError(
                 f"groups.{name} cannot own sources or requirements; assign them to packages")
         group_defs[name] = GroupDef(
+            label=str(raw.get("label") or name.replace("_", " ").title()),
+            category=str(raw.get("category") or "Other"),
+            hidden=bool(raw.get("hidden", False)),
             immutable=bool(raw.get("immutable", False)),
             members=members,
-            triggers=triggers,
+            triggers=triggers or members,
             capabilities=normalize_capability_tuple(
                 string_tuple(raw.get("capabilities"), f"groups.{name}.capabilities")),
             any_capabilities=normalize_capability_tuple(
@@ -232,6 +239,23 @@ def load_catalog(path: Path) -> PackageCatalog:
     immutable_groups = [name for name, group in group_defs.items() if group.immutable]
     if not immutable_groups:
         raise ValueError("package catalog must define an immutable bootstrap group")
+
+    group_reachable = {
+        package
+        for group_def in group_defs.values()
+        for package in group_def.members
+    }
+    pending = list(group_reachable)
+    while pending:
+        package = pending.pop()
+        for dependency in package_defs[package].depends:
+            if dependency not in group_reachable:
+                group_reachable.add(dependency)
+                pending.append(dependency)
+    unreachable = sorted(package_set - group_reachable)
+    if unreachable:
+        raise ValueError(
+            "package(s) not reachable from any group: " + ", ".join(unreachable))
 
     return PackageCatalog(
         groups=groups,
@@ -247,7 +271,7 @@ def load_flavor(path: Path,
         data = tomllib.load(file)
 
     flavor = data.get("flavor", {})
-    package_groups = data.get("package_groups", {})
+    package_groups = data.get("groups", data.get("package_groups", {}))
     packages = data.get("packages", {})
     name = str(flavor.get("name") or path.stem)
     description = str(flavor.get("description") or "")
@@ -256,6 +280,8 @@ def load_flavor(path: Path,
     packages_enabled = {package: False for package in catalog.packages}
     package_overrides: dict[str, bool] = {}
 
+    if not isinstance(package_groups, dict):
+        raise ValueError("flavor groups must be a TOML table")
     unknown_groups = sorted(set(package_groups) - set(catalog.groups))
     if unknown_groups:
         raise ValueError(f"unknown package group key(s): {', '.join(unknown_groups)}")
@@ -324,6 +350,13 @@ def load_flavor(path: Path,
     return name, description, groups_effective, packages_enabled
 
 
+def public_flavor_name(configured_name: str, override: str) -> str:
+    name = override or configured_name
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name) is None:
+        raise ValueError(f"invalid flavor name: {name!r}")
+    return name
+
+
 def capabilities_supported(required: tuple[str, ...],
                            any_required: tuple[str, ...],
                            available: set[str]) -> bool:
@@ -350,6 +383,17 @@ def enable_required_packages(catalog: PackageCatalog,
         result[package] = True
         pending.extend(catalog.package_defs[package].depends)
     return result
+
+
+def apply_update_layout(catalog: PackageCatalog,
+                        packages_enabled: dict[str, bool],
+                        layout: str) -> dict[str, bool]:
+    """Add packages inherent to the physical update layout."""
+    if layout not in {"ota", "single"}:
+        raise ValueError(f"unknown update layout: {layout}")
+    if layout == "single":
+        return dict(packages_enabled)
+    return enable_required_packages(catalog, packages_enabled, {"service_ota"})
 
 
 def apply_board_capability_pruning(catalog: PackageCatalog,
@@ -503,6 +547,7 @@ def generate_header(name: str,
         f"#define SOLAR_OS_PACKAGE_CATALOG_FILE {c_string(str(package_catalog))}",
         f"#define SOLAR_OS_PACKAGE_GROUP_LIST {c_string(' '.join(enabled_groups))}",
         f"#define SOLAR_OS_PACKAGE_LIST {c_string(' '.join(enabled_package_labels))}",
+        f"#define SOLAR_OS_PACKAGE_ID_LIST {c_string(' '.join(enabled_packages))}",
         f"#define SOLAR_OS_PACKAGE_REQUIRED_CAPABILITIES {c_string(' '.join(collect_capabilities(catalog, groups_enabled, packages_enabled)))}",
         f"#define SOLAR_OS_JOBS_MAX {enabled_job_count}",
         "",
@@ -537,6 +582,9 @@ def generate_cmake(name: str,
         for package in catalog.packages
         if packages_enabled[package]
     ]
+    enabled_packages = [
+        package for package in catalog.packages if packages_enabled[package]
+    ]
     enabled_job_count = len(collect_job_packages(catalog, packages_enabled))
     lines = [
         "# Generated by scripts/generate_flavor_config.py. Do not edit.",
@@ -546,6 +594,7 @@ def generate_cmake(name: str,
         f"set(SOLAR_OS_PACKAGE_CATALOG_FILE {cmake_string(package_catalog)})",
         f"set(SOLAR_OS_PACKAGE_GROUP_LIST {cmake_string(' '.join(enabled_groups))})",
         f"set(SOLAR_OS_PACKAGE_LIST {cmake_string(' '.join(enabled_package_labels))})",
+        f"set(SOLAR_OS_PACKAGE_ID_LIST {cmake_string(' '.join(enabled_packages))})",
         f"set(SOLAR_OS_PACKAGE_REQUIRED_CAPABILITIES {cmake_string(' '.join(collect_capabilities(catalog, groups_enabled, packages_enabled)))})",
         f"set(SOLAR_OS_JOBS_MAX {enabled_job_count})",
     ]
@@ -568,9 +617,11 @@ def generate_cmake(name: str,
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, type=Path)
+    parser.add_argument("--name-override", default="")
     parser.add_argument("--packages", default=DEFAULT_PACKAGE_CATALOG, type=Path)
     parser.add_argument("--board-capabilities", default="")
     parser.add_argument("--board-required-packages", default="")
+    parser.add_argument("--layout", choices=("ota", "single"), default="ota")
     parser.add_argument("--target", required=True)
     parser.add_argument("--header", required=True, type=Path)
     parser.add_argument("--cmake", required=True, type=Path)
@@ -579,12 +630,14 @@ def main() -> int:
     try:
         catalog = load_catalog(args.packages)
         name, description, groups_enabled, packages_enabled = load_flavor(args.input, catalog)
+        name = public_flavor_name(name, args.name_override)
         required_packages = parse_package_list(args.board_required_packages)
         packages_enabled = enable_required_packages(
             catalog,
             packages_enabled,
             required_packages,
         )
+        packages_enabled = apply_update_layout(catalog, packages_enabled, args.layout)
         packages_enabled = apply_target_pruning(
             catalog,
             packages_enabled,

@@ -7,6 +7,140 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RuntimeBoundaryTest(unittest.TestCase):
+    def test_inactive_expansion_driver_registries_use_external_bss(self):
+        declarations = {
+            "src/services/solar_os_ssd1306.c":
+                "static EXT_RAM_BSS_ATTR solar_os_ssd1306_device_t devices",
+            "src/services/solar_os_pcd8544.c":
+                "static EXT_RAM_BSS_ATTR solar_os_pcd8544_device_t devices",
+            "src/services/solar_os_analog_joystick.c":
+                "static EXT_RAM_BSS_ATTR solar_os_analog_joystick_device_t",
+            "src/services/solar_os_cardkb.c":
+                "static EXT_RAM_BSS_ATTR solar_os_cardkb_device_t cardkb_devices",
+            "src/services/solar_os_gpio_keys.c":
+                "static EXT_RAM_BSS_ATTR solar_os_gpio_keys_device_t devices",
+        }
+        for key, declaration in declarations.items():
+            relative_path = key.split("#", 1)[0]
+            source = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertIn(declaration, source, key)
+
+    def test_hot_core_registries_stay_internal(self):
+        declarations = {
+            "src/solar_os_jobs.c":
+                "static solar_os_job_runtime_t job_runtimes",
+            "src/services/solar_os_sessions.c":
+                "static solar_os_session_state_t session_state",
+            "src/services/solar_os_buses.c":
+                "static solar_os_bus_info_t buses",
+            "src/services/solar_os_port.c":
+                "static solar_os_port_entry_t ports",
+            "src/apps/solar_os_app_registry.c":
+                "static char app_owners",
+            "src/jobs/solar_os_telnetd_job.c":
+                "static telnetd_job_state_t telnetd_job",
+        }
+        for relative_path, declaration in declarations.items():
+            source = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertIn(declaration, source, relative_path)
+
+    def test_expansion_registry_prefers_external_memory(self):
+        source = (ROOT / "src/services/solar_os_expansion.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("SOLAR_OS_EXPANSION_DEVICE_MAX", source)
+        self.assertIn("solar_os_memory_calloc(", source)
+        self.assertIn("SOLAR_OS_MEMORY_EXTERNAL_PREFERRED", source)
+        self.assertIn("static StaticSemaphore_t devices_mutex_storage;", source)
+        self.assertNotIn("portENTER_CRITICAL(&devices_lock)", source)
+
+    def test_t_lora_devices_preserve_registered_resources_on_detach(self):
+        keyboard = (ROOT / "src/services/solar_os_tca8418.c").read_text(
+            encoding="utf-8"
+        )
+        radio = (ROOT / "src/services/solar_os_sx1262.c").read_text(
+            encoding="utf-8"
+        )
+
+        clear_keyboard = keyboard.split("static void clear_device", 1)[1].split(
+            "esp_err_t solar_os_tca8418_attach", 1
+        )[0]
+        self.assertIn("pwm_port_stop", clear_keyboard)
+        self.assertIn("backlight_active", clear_keyboard)
+
+        detach_radio = radio.split("esp_err_t solar_os_sx1262_detach", 1)[1]
+        self.assertIn(
+            "ESP_RETURN_ON_ERROR(solar_os_radio_unregister(name)", detach_radio
+        )
+        self.assertLess(
+            detach_radio.index("solar_os_radio_unregister(name)"),
+            detach_radio.index("clear_device(device)"),
+        )
+
+    def test_expansion_drivers_declare_categories(self):
+        descriptor_sources = []
+        for path in (ROOT / "src/services").glob("*.c"):
+            source = path.read_text(encoding="utf-8")
+            if "const solar_os_expansion_driver_t" in source:
+                descriptor_sources.append((path, source))
+        self.assertTrue(descriptor_sources)
+        for path, source in descriptor_sources:
+            descriptor_count = len(re.findall(
+                r"(?:static )?const solar_os_expansion_driver_t\s+\w+\s*=\s*\{",
+                source,
+            ))
+            if descriptor_count == 0:
+                continue
+            category_count = source.count(
+                ".category = SOLAR_OS_EXPANSION_CATEGORY_"
+            )
+            self.assertEqual(category_count, descriptor_count, path.name)
+
+    def test_expansion_driver_command_orders_explicit_categories(self):
+        shell = (ROOT / "src/shell/solar_os_shell_expansion.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn('"CATEGORY"', shell)
+        self.assertIn("solar_os_shell_io_printf_bold(", shell)
+        self.assertIn('"  %-*s %-5s %-6s %s\\n"', shell)
+        self.assertIn("expansion_next_driver_in_category", shell)
+        self.assertIn("strcmp(driver.name, next->name) < 0", shell)
+        self.assertIn(
+            "solar_os_expansion_category_name(category)",
+            shell,
+        )
+
+    def test_rotary_encoder_is_interrupt_driven_without_iram_handler(self):
+        rotary = (ROOT / "src/services/solar_os_rotary_encoder.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("GPIO_INTR_ANYEDGE", rotary)
+        self.assertEqual(rotary.count("gpio_isr_handler_add("), 2)
+        self.assertIn("xQueueSendFromISR", rotary)
+        self.assertIn("xQueueReceive", rotary)
+        self.assertNotIn("ROTARY_POLL_MS", rotary)
+        self.assertNotIn("IRAM_ATTR rotary_gpio_isr", rotary)
+
+    def test_telnet_uses_an_external_listener_and_internal_shell_stack(self):
+        telnetd = (ROOT / "src/jobs/solar_os_telnetd_job.c").read_text(
+            encoding="utf-8"
+        )
+        port_shell = (ROOT / "src/services/solar_os_port_shell.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("solar_os_task_create_pinned_external(telnetd_job_task", telnetd)
+        self.assertIn("solar_os_task_delete_external(NULL);", telnetd)
+        self.assertIn(".worker_stack_external = true,", telnetd)
+        self.assertIn("#define PORT_SHELL_TASK_STACK 16384", port_shell)
+
+    def test_audio_tone_worker_has_stack_for_default_device_playback(self):
+        audio = (ROOT / "src/services/solar_os_audio.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("#define AUDIO_TONE_WORKER_STACK 8192U", audio)
+
     def test_main_delegates_service_boot(self):
         main = (ROOT / "src/main.c").read_text(encoding="utf-8")
         boot = (ROOT / "src/services/solar_os_boot_services.c").read_text(
@@ -49,6 +183,132 @@ class RuntimeBoundaryTest(unittest.TestCase):
         self.assertIn("SOLAR_OS_BOARD_RUNTIME_SPI_HOST_MASK", buses)
         self.assertIn("SOLAR_OS_BOARD_RUNTIME_UART_PORT_MASK", buses)
 
+    def test_telnet_client_owns_a_scoped_wifi_latency_lease(self):
+        telnetd = (ROOT / "src/jobs/solar_os_telnetd_job.c").read_text(
+            encoding="utf-8"
+        )
+        wifi = (ROOT / "src/services/solar_os_wifi.c").read_text(
+            encoding="utf-8"
+        )
+
+        accept_start = telnetd.index("static bool telnetd_accept_one(")
+        accept_end = telnetd.index("static void telnetd_job_task(", accept_start)
+        accept = telnetd[accept_start:accept_end]
+        cleanup_start = telnetd.index("static bool telnetd_cleanup_client(")
+        cleanup_end = telnetd.index("static void telnetd_reject_busy(", cleanup_start)
+        cleanup = telnetd[cleanup_start:cleanup_end]
+
+        self.assertIn("solar_os_wifi_latency_acquire", accept)
+        self.assertIn("solar_os_wifi_latency_release", cleanup)
+        self.assertIn(
+            "wifi_connectionless_active || wifi_latency_owner[0] != '\\0'",
+            wifi,
+        )
+
+    def test_wifi_repeater_is_l2_forwarding_not_nat_alias(self):
+        wifi = (ROOT / "src/services/solar_os_wifi.c").read_text(
+            encoding="utf-8"
+        )
+        repeater = (ROOT / "src/services/solar_os_wifi_repeater.c").read_text(
+            encoding="utf-8"
+        )
+        routes = (ROOT / "src/services/solar_os_lwip_route.c").read_text(
+            encoding="utf-8"
+        )
+        packages = (ROOT / "packages/solar_os_packages.toml").read_text(
+            encoding="utf-8"
+        )
+        shell = (ROOT / "src/shell/solar_os_shell_network.c").read_text(
+            encoding="utf-8"
+        )
+        completion = (ROOT / "src/apps/solar_os_shell.c").read_text(
+            encoding="utf-8"
+        )
+        descriptor = (ROOT / "src/apps/solar_os_script_api.inc").read_text(
+            encoding="utf-8"
+        )
+
+        start = wifi.index("esp_err_t solar_os_wifi_repeater_start(")
+        end = wifi.index("esp_err_t solar_os_wifi_repeater_stop(", start)
+        start_function = wifi[start:end]
+        self.assertIn("if (solar_os_wifi_repeater_is_enabled())", start_function)
+        self.assertIn("solar_os_wifi_connect_saved()", start_function)
+        self.assertIn("wifi_ap_start_config(repeater_profile.ssid", start_function)
+        self.assertIn("solar_os_wifi_repeater_enable(", start_function)
+        self.assertLess(
+            start_function.index("wifi_ap_start_config(repeater_profile.ssid"),
+            start_function.index("solar_os_wifi_repeater_enable("),
+        )
+        self.assertIn("wifi_repeater_starting", start_function)
+        self.assertNotIn("solar_os_wifi_nat_set(true)", start_function)
+        self.assertIn("wifi_find_profile_index_locked(wifi_ssid)", start_function)
+        self.assertIn('repeater_profile.password[0] == \'\\0\' ? "open" : "wpa2"', start_function)
+        self.assertIn("false);", start_function)
+        self.assertIn("request->ap->input = repeater_ap_input", repeater)
+        self.assertIn("request->sta->input = repeater_sta_input", repeater)
+        self.assertIn("repeater.ap->input == repeater_ap_input", repeater)
+        self.assertIn("repeater.sta->input == repeater_sta_input", repeater)
+        self.assertIn("esp_netif_dhcps_stop", repeater)
+        self.assertIn("repeater_send_proxy_arp", repeater)
+        self.assertIn("SOLAR_OS_WIFI_REPEATER_CLIENT_MAX", repeater)
+        self.assertNotIn("esp_netif_napt_enable", repeater)
+        self.assertIn("solar_os_wifi_repeater_route(dest)", routes)
+        self.assertIn("solar_os_wifi_repeater_upstream_route()", routes)
+        self.assertIn("wifi_repeater_schedule_reconnect()", wifi)
+        self.assertIn('"services/solar_os_wifi_repeater.c"', packages)
+        self.assertIn('strcmp(argv[1], "repeater")', shell)
+        self.assertIn('"repeater",', completion)
+        self.assertIn(
+            "SHELL_COMPLETION_STATIC(path_wifi_repeater, wifi_repeater_subcommands)",
+            completion,
+        )
+        self.assertIn(
+            'static const char * const wifi_repeater_subcommands[] = {"on", "off"};',
+            completion,
+        )
+        self.assertNotIn("path_wifi_repeater_on_auth", completion)
+        for method in ("repeater_start", "repeater_stop"):
+            self.assertIn(
+                f"SOLAR_OS_SCRIPT_API_FUNCTION(wifi, {method}, {method});",
+                descriptor,
+            )
+
+    def test_radio_link_repeater_is_one_hop_and_bounded(self):
+        link_header = (ROOT / "src/services/solar_os_link.h").read_text(
+            encoding="utf-8"
+        )
+        repeater_header = (
+            ROOT / "src/services/solar_os_link_repeater.h"
+        ).read_text(encoding="utf-8")
+        repeater = (
+            ROOT / "src/services/solar_os_link_repeater.c"
+        ).read_text(encoding="utf-8")
+        radio_link = (
+            ROOT / "src/jobs/solar_os_radio_link_job.c"
+        ).read_text(encoding="utf-8")
+        completion = (ROOT / "src/apps/solar_os_shell.c").read_text(
+            encoding="utf-8"
+        )
+        packages = (ROOT / "packages/solar_os_packages.toml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("SOLAR_OS_LINK_FLAG_RELAYED", link_header)
+        self.assertIn("SOLAR_OS_LINK_REPEATER_PENDING_MAX 4U", repeater_header)
+        self.assertIn("SOLAR_OS_LINK_REPEATER_CACHE_MAX 16U", repeater_header)
+        self.assertIn("SOLAR_OS_LINK_REPEATER_DELAY_MIN_MS 80U", repeater_header)
+        self.assertIn("message->flags & SOLAR_OS_LINK_FLAG_RELAYED", repeater)
+        self.assertIn("repeater_cancel_acknowledged", repeater)
+        self.assertIn("message.flags |= SOLAR_OS_LINK_FLAG_RELAYED", radio_link)
+        self.assertIn('static const char repeater_prefix[] = "repeater=";', radio_link)
+        self.assertIn('"repeater=off"', completion)
+        self.assertIn('"repeater=on"', completion)
+        self.assertIn(
+            "SHELL_COMPLETION_STATIC(path_job_start_radio_link_option_2,",
+            completion,
+        )
+        self.assertIn('"services/solar_os_link_repeater.c"', packages)
+
     def test_boot_coordinator_is_packaged(self):
         packages = (ROOT / "packages/solar_os_packages.toml").read_text(
             encoding="utf-8"
@@ -73,6 +333,82 @@ class RuntimeBoundaryTest(unittest.TestCase):
             "        (solar_os_input_keyboard_layout_t)value);",
             ble,
         )
+
+    def test_ble_reconnect_is_scan_gated_to_the_remembered_peer(self):
+        ble = (ROOT / "src/services/solar_os_ble_keyboard.c").read_text(
+            encoding="utf-8"
+        )
+        reconnect_start = ble.index("static void reconnect_task(")
+        reconnect_end = ble.index("static void schedule_reconnect(", reconnect_start)
+        reconnect = ble[reconnect_start:reconnect_end]
+        candidate_start = ble.index("static void consider_candidate(")
+        candidate_end = ble.index(
+            "static bool key_in_report(", candidate_start
+        )
+        candidate = ble[candidate_start:candidate_end]
+
+        self.assertIn(
+            "scan_and_open_keyboard(BLE_KEYBOARD_SCAN_RECONNECT)", reconnect
+        )
+        self.assertNotIn("open_keyboard(peer->bda", reconnect)
+        self.assertIn(
+            "active_scan_mode == BLE_KEYBOARD_SCAN_RECONNECT", candidate
+        )
+        self.assertIn("bda_matches_remembered_peer", candidate)
+        self.assertIn("BLE_KEYBOARD_RECONNECT_BACKOFF_MAX_MS", reconnect)
+
+    def test_ble_reconnect_requires_connectable_advertisement_and_stops_scan(self):
+        ble = (ROOT / "src/services/solar_os_ble_keyboard.c").read_text(
+            encoding="utf-8"
+        )
+        candidate_start = ble.index("static void consider_candidate(")
+        candidate_end = ble.index("static bool key_in_report(", candidate_start)
+        candidate = ble[candidate_start:candidate_end]
+        callback_start = ble.index("static esp_err_t stop_scanning(")
+        callback_end = ble.index("static const char *keyboard_layout_names", callback_start)
+        callback = ble[callback_start:callback_end]
+        scan_start = ble.index("static esp_err_t run_keyboard_scan(")
+        scan_end = ble.index(
+            "static esp_err_t close_connected_keyboard_for_pairing(",
+            scan_start,
+        )
+        scan = ble[scan_start:scan_end]
+
+        self.assertIn(
+            "solar_os_ble_keyboard_scan_reconnect_event_is_connectable",
+            candidate,
+        )
+        self.assertIn("reconnect_scan_stop_requested", candidate)
+        self.assertIn("stop_scanning()", candidate)
+        self.assertIn("ble_gap_disc_cancel()", callback)
+        self.assertIn("xSemaphoreGive(scan_stop_done_sem)", callback)
+        self.assertIn("xSemaphoreTake(scan_stop_done_sem", scan)
+        self.assertLess(
+            scan.index("xSemaphoreTake(scan_stop_done_sem"),
+            scan.rindex("active_scan_mode = BLE_KEYBOARD_SCAN_DISCOVERY;"),
+        )
+        self.assertNotIn("open_keyboard(", callback)
+
+    def test_ble_reconnect_preserves_matched_candidate_until_open(self):
+        ble = (ROOT / "src/services/solar_os_ble_keyboard.c").read_text(
+            encoding="utf-8"
+        )
+        candidate_start = ble.index("static void consider_candidate(")
+        candidate_end = ble.index("static bool key_in_report(", candidate_start)
+        candidate = ble[candidate_start:candidate_end]
+        open_start = ble.index("static esp_err_t scan_and_open_keyboard(")
+        open_end = ble.index("static void scan_task(", open_start)
+        open_path = ble[open_start:open_end]
+
+        self.assertLess(
+            candidate.index("if (candidate_frozen)"),
+            candidate.index("bda_matches_remembered_peer"),
+        )
+        self.assertIn("candidate_frozen = true;", candidate)
+        self.assertIn("ble_keyboard_candidate_t selected_candidate = {0};", open_path)
+        self.assertIn("run_keyboard_scan(mode, &selected_candidate)", open_path)
+        self.assertIn("open_keyboard(selected_candidate.bda", open_path)
+        self.assertNotIn("open_keyboard(candidate.bda", open_path)
 
     def test_audio_stream_direction_and_shell_capabilities(self):
         audio = (ROOT / "src/services/solar_os_audio.c").read_text(
@@ -101,6 +437,35 @@ class RuntimeBoundaryTest(unittest.TestCase):
             )
             self.assertIn("SOLAR_OS_APP_CAP_DISPLAY", entry)
             self.assertIn("SOLAR_OS_APP_CAP_PORT", entry)
+
+        arecord = next(
+            line
+            for line in registry.splitlines()
+            if 'APP_ENTRY("arecord"' in line
+        )
+        self.assertIn("[-d seconds] [-i capture-stream] <file.wav>", arecord)
+        self.assertTrue(arecord.endswith(", 2, 6),"))
+
+    def test_playground_registry_usage_lists_every_subcommand(self):
+        registry = (ROOT / "src/apps/solar_os_app_registry.c").read_text(
+            encoding="utf-8"
+        )
+        entry = next(
+            line
+            for line in registry.splitlines()
+            if 'APP_ENTRY("playground"' in line
+        )
+        for command in (
+            "search",
+            "install",
+            "run",
+            "delete",
+            "refresh",
+            "reload",
+            "source",
+            "storage",
+        ):
+            self.assertIn(command, entry)
 
     def test_sessions_restore_apps_without_resume_renderers(self):
         sessions = (ROOT / "src/services/solar_os_sessions.c").read_text(
@@ -147,6 +512,31 @@ class RuntimeBoundaryTest(unittest.TestCase):
         self.assertIn("if (lines->frame->clear_background)", tft)
         self.assertIn("display->config.width - 1U", tft)
         self.assertIn("display->config.height - 1U", tft)
+
+    def test_display_targets_use_u8g2_logical_geometry(self):
+        display = (ROOT / "src/services/solar_os_display.c").read_text(
+            encoding="utf-8"
+        )
+        board_display = (
+            ROOT / "src/board/solar_os_board_display_expansion.c"
+        ).read_text(encoding="utf-8")
+        tft = (ROOT / "src/services/solar_os_tft_display.c").read_text(
+            encoding="utf-8"
+        )
+
+        for source in (display, board_display):
+            self.assertIn(
+                "width != u8g2_GetDisplayWidth", source
+            )
+            self.assertIn(
+                "height != u8g2_GetDisplayHeight", source
+            )
+        registered_geometry = tft.split(
+            "device->display = (solar_os_board_display_t)", 1
+        )[1].split(".surface_formats", 1)[0]
+        self.assertIn(".width = u8g2_GetDisplayWidth(u8g2)", registered_geometry)
+        self.assertIn(".height = u8g2_GetDisplayHeight(u8g2)", registered_geometry)
+        self.assertNotIn("SOLAR_OS_BOARD_DISPLAY_NATIVE_WIDTH", registered_geometry)
 
     def test_foreground_apps_use_one_class_lifecycle(self):
         sources = list((ROOT / "src/apps").glob("*.c"))

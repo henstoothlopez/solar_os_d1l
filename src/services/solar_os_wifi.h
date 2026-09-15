@@ -13,6 +13,7 @@
 #define SOLAR_OS_WIFI_AUTH_MAX 18
 #define SOLAR_OS_WIFI_PROFILE_MAX 5
 #define SOLAR_OS_WIFI_CONNECTIONLESS_OWNER_MAX 32
+#define SOLAR_OS_WIFI_LATENCY_OWNER_MAX 32
 
 typedef enum {
     SOLAR_OS_WIFI_STATE_OFF,
@@ -42,6 +43,8 @@ typedef struct {
     bool has_saved_ap_config;
     bool nat_enabled;
     bool nat_active;
+    bool repeater_enabled;
+    bool repeater_active;
     bool ap_enabled;
     bool ap_running;
     bool connectionless_active;
@@ -64,6 +67,10 @@ typedef struct {
     uint8_t ap_max_connections;
     uint8_t connectionless_channel;
     uint8_t saved_profile_count;
+    uint8_t repeater_learned_clients;
+    uint64_t repeater_upstream_frames;
+    uint64_t repeater_downstream_frames;
+    uint64_t repeater_dropped_frames;
     esp_err_t nat_last_error;
     char connectionless_owner[SOLAR_OS_WIFI_CONNECTIONLESS_OWNER_MAX];
 } solar_os_wifi_status_t;
@@ -72,6 +79,12 @@ typedef struct {
     char ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
     bool preferred;
 } solar_os_wifi_profile_t;
+
+typedef struct {
+    char ssid[SOLAR_OS_WIFI_SSID_MAX + 1];
+    char password[SOLAR_OS_WIFI_PASSWORD_MAX];
+    char auth[SOLAR_OS_WIFI_AUTH_MAX];
+} solar_os_wifi_ap_config_t;
 
 esp_err_t solar_os_wifi_init(void);
 bool solar_os_wifi_enabled_for_current_boot(void);
@@ -92,12 +105,24 @@ esp_err_t solar_os_wifi_known(solar_os_wifi_profile_t *profiles, size_t max_prof
 bool solar_os_wifi_is_known_ssid(const char *ssid);
 esp_err_t solar_os_wifi_ap_start(const char *ssid, const char *password, const char *auth);
 esp_err_t solar_os_wifi_ap_stop(void);
+esp_err_t solar_os_wifi_ap_saved_get(solar_os_wifi_ap_config_t *config);
+esp_err_t solar_os_wifi_ap_save(const char *ssid, const char *password, const char *auth);
+esp_err_t solar_os_wifi_ap_forget(void);
 esp_err_t solar_os_wifi_nat_set(bool enabled);
+esp_err_t solar_os_wifi_repeater_start(void);
+esp_err_t solar_os_wifi_repeater_stop(void);
 esp_err_t solar_os_wifi_scan(solar_os_wifi_ap_t *aps, size_t max_aps, size_t *found);
+esp_err_t solar_os_wifi_scan_start_async(void);
+esp_err_t solar_os_wifi_scan_results(solar_os_wifi_ap_t *aps, size_t max_aps, size_t *found);
+esp_err_t solar_os_wifi_scan_cancel_async(void);
 esp_err_t solar_os_wifi_connectionless_acquire(const char *owner,
                                                uint8_t requested_channel,
                                                uint8_t *actual_channel);
 esp_err_t solar_os_wifi_connectionless_release(const char *owner);
+/* One latency-sensitive owner can suppress modem sleep. Reacquiring with the
+ * same owner is idempotent; release restores the remaining radio policy. */
+esp_err_t solar_os_wifi_latency_acquire(const char *owner);
+esp_err_t solar_os_wifi_latency_release(const char *owner);
 void solar_os_wifi_get_status(solar_os_wifi_status_t *status);
 void solar_os_wifi_get_status_text(char *buffer, size_t len);
 const char *solar_os_wifi_state_name(solar_os_wifi_state_t state);

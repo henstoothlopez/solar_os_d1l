@@ -3,14 +3,51 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
 ROOT := ../..
 WRITER_DIR := $(ROOT)/src/apps
-TARGETS := writer_buffer_test writer_files_test sketch_canvas_test text_search_test doc_layout_test shell_parse_test shell_launch_test shell_line_test shell_completion_test shell_diag_test scheduler_test script_lifecycle_test app_file_types_test gameboy_support_test storage_mounts_test json_scan_test keys_test input_test board_caps_test hid_keyboard_report_test ble_keyboard_scan_policy_test ps2_keyboard_test ps2_mouse_test cardkb_codec_test midi_codec_test midi_service_test parameters_test controls_test osc_test dsp_test stream_test resources_test audio_codec_test webradio_catalog_test gif_decode_stack_test nvs_backup_test agent_reference_test terminal_geometry_test app_exit_result_test terminal_preferences_test tui_widgets_test wireguard_crypto_test meshcore_channel_key_test meshcore_stream_codec_test time_timezone_test
+TARGETS := writer_buffer_test writer_files_test sketch_canvas_test launcher_layout_test gfx_icons_test text_search_test doc_layout_test shell_parse_test shell_launch_test shell_line_test shell_completion_test shell_diag_test scheduler_test schedule_test script_lifecycle_test app_file_types_test gameboy_support_test storage_mounts_test json_scan_test keys_test input_test board_caps_test hid_keyboard_report_test ble_keyboard_scan_policy_test ps2_keyboard_test ps2_mouse_test cardkb_codec_test cl32_keyboard_test battery_service_test midi_codec_test midi_service_test parameters_test controls_test osc_test dsp_test stream_test resources_test expansion_registry_test audio_codec_test webradio_catalog_test gif_decode_stack_test nvs_backup_test agent_reference_test manual_external_metadata_test terminal_geometry_test app_exit_result_test terminal_preferences_test tui_widgets_test wireguard_crypto_test meshcore_channel_key_test meshcore_stream_codec_test link_repeater_test time_timezone_test rtc_service_test rtc_pcf85063_test
 
 MANUAL_GENERATED_DIR := generated/solar_os
 MANUAL_GENERATED_HEADER := $(MANUAL_GENERATED_DIR)/solar_os_manual_data.h
 
 .PHONY: all test clean
 
+TARGETS += ble_service_test ble_multi_peer_test ble_nimble_test ble_hid_test ble_lua_bindings_test ble_server_test
+
 all: $(TARGETS)
+
+ble_multi_peer_test: ble_multi_peer_test.c ble_test_support.c $(ROOT)/src/services/solar_os_ble.c $(ROOT)/src/services/solar_os_ble.h
+	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L -pthread -include compat.h -Ible_stubs -I. -I$(ROOT)/src/services \
+		ble_multi_peer_test.c ble_test_support.c -o $@
+
+ble_nimble_test ble_hid_test ble_server_test: %: %.c nimble_test_support.c ble_test_support.c \
+		$(ROOT)/src/services/solar_os_ble_nimble.c $(ROOT)/src/services/solar_os_ble_hid.c \
+		$(ROOT)/src/services/solar_os_ble_hid_report_map.c \
+		$(ROOT)/src/services/solar_os_ble_nimble_server.inc \
+		$(wildcard $(ROOT)/src/services/solar_os_ble*.h) \
+		$(wildcard ble_stubs/freertos/*.h) \
+		$(wildcard nimble_stubs/*/*.h) $(wildcard nimble_stubs/*.h)
+	$(CC) $(CFLAGS) -Wno-unused-parameter -D_POSIX_C_SOURCE=200809L -pthread -include compat.h \
+		-Inimble_stubs -Ible_stubs -I. -I$(ROOT)/src/services \
+		$< nimble_test_support.c ble_test_support.c $(ROOT)/src/services/solar_os_ble_hid_report_map.c -o $@
+
+LUA_DIR := $(ROOT)/components/lua/lua/src
+LUA_TEST_SOURCES := $(filter-out $(LUA_DIR)/lua.c $(LUA_DIR)/luac.c \
+	$(LUA_DIR)/linit.c $(LUA_DIR)/liolib.c $(LUA_DIR)/loadlib.c $(LUA_DIR)/loslib.c, \
+	$(wildcard $(LUA_DIR)/*.c))
+
+ble_lua_bindings_test: ble_lua_bindings_test.c ble_service_test.c ble_test_support.c \
+		$(WRITER_DIR)/solar_os_lua_ble.inc $(ROOT)/src/services/solar_os_ble.c \
+		$(ROOT)/src/services/solar_os_ble.h $(ROOT)/src/services/solar_os_ble_backend.h \
+		ble_stubs/freertos/semphr.h ble_stubs/freertos/task.h $(LUA_TEST_SOURCES)
+	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L -pthread -include compat.h \
+		-Ible_stubs -I. -I$(ROOT)/src/services -I$(WRITER_DIR) -I$(LUA_DIR) \
+		ble_lua_bindings_test.c ble_test_support.c $(ROOT)/src/services/solar_os_ble.c \
+		$(LUA_TEST_SOURCES) -lm -o $@
+
+ble_service_test: ble_service_test.c ble_test_support.c $(ROOT)/src/services/solar_os_ble.c \
+		$(ROOT)/src/services/solar_os_ble.h $(ROOT)/src/services/solar_os_ble_backend.h \
+		ble_stubs/freertos/semphr.h ble_stubs/freertos/task.h
+	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L -pthread -include compat.h -Ible_stubs -I. -I$(ROOT)/src/services \
+		ble_service_test.c ble_test_support.c $(ROOT)/src/services/solar_os_ble.c -o $@
 
 writer_buffer_test: writer_buffer_test.c $(WRITER_DIR)/solar_os_writer_buffer.c $(WRITER_DIR)/solar_os_writer_buffer.h esp_err.h
 	$(CC) $(CFLAGS) -DSOLAR_OS_WRITER_HOST_TEST -I. -I$(WRITER_DIR) \
@@ -31,6 +68,17 @@ sketch_canvas_test: sketch_canvas_test.c $(WRITER_DIR)/solar_os_sketch_canvas.c 
 	$(CC) $(CFLAGS) -I. -I$(WRITER_DIR) \
 		sketch_canvas_test.c $(WRITER_DIR)/solar_os_sketch_canvas.c -o $@
 
+launcher_layout_test: launcher_layout_test.c $(WRITER_DIR)/solar_os_launcher_layout.c $(WRITER_DIR)/solar_os_launcher_layout.h
+	$(CC) $(CFLAGS) -I$(WRITER_DIR) \
+		launcher_layout_test.c $(WRITER_DIR)/solar_os_launcher_layout.c -o $@
+
+gfx_icons_test: gfx_icons_test.c $(ROOT)/src/services/solar_os_gfx_icons.c \
+		$(ROOT)/src/services/solar_os_gfx.h \
+		$(ROOT)/src/services/solar_os_gfx_icons.h \
+		$(ROOT)/src/services/solar_os_gfx_icon_table.inc esp_err.h
+	$(CC) $(CFLAGS) -I. -I$(ROOT)/src/services \
+		gfx_icons_test.c $(ROOT)/src/services/solar_os_gfx_icons.c -o $@
+
 text_search_test: text_search_test.c $(ROOT)/src/services/solar_os_text_search.c $(ROOT)/src/services/solar_os_text_search.h
 	$(CC) $(CFLAGS) -I$(ROOT)/src/services \
 		text_search_test.c $(ROOT)/src/services/solar_os_text_search.c -o $@
@@ -47,9 +95,10 @@ shell_line_test: shell_line_test.c $(ROOT)/src/shell/solar_os_shell_line.c $(ROO
 	$(CC) $(CFLAGS) -I$(ROOT)/src/shell \
 		shell_line_test.c $(ROOT)/src/shell/solar_os_shell_line.c -o $@
 
-shell_completion_test: shell_completion_test.c $(ROOT)/src/shell/solar_os_shell_completion.c $(ROOT)/src/shell/solar_os_shell_completion.h
+shell_completion_test: shell_completion_test.c $(ROOT)/src/shell/solar_os_shell_completion.c $(ROOT)/src/shell/solar_os_shell_completion.h $(ROOT)/src/shell/solar_os_shell_parse.c $(ROOT)/src/shell/solar_os_shell_parse.h
 	$(CC) $(CFLAGS) -I$(ROOT)/src/shell \
-		shell_completion_test.c $(ROOT)/src/shell/solar_os_shell_completion.c -o $@
+		shell_completion_test.c $(ROOT)/src/shell/solar_os_shell_completion.c \
+		$(ROOT)/src/shell/solar_os_shell_parse.c -o $@
 
 shell_diag_test: shell_diag_test.c $(ROOT)/src/shell/solar_os_shell_common.c $(ROOT)/src/shell/solar_os_shell_common.h $(ROOT)/src/shell/solar_os_shell_io.h
 	$(CC) $(CFLAGS) -D_GNU_SOURCE -ffunction-sections -fdata-sections \
@@ -138,6 +187,14 @@ cardkb_codec_test: cardkb_codec_test.c $(ROOT)/src/services/solar_os_cardkb_code
 	$(CC) $(CFLAGS) -I$(ROOT)/src/services \
 		cardkb_codec_test.c $(ROOT)/src/services/solar_os_cardkb_codec.c -o $@
 
+cl32_keyboard_test: cl32_keyboard_test.c $(ROOT)/src/services/solar_os_cl32_keyboard.c $(ROOT)/src/services/solar_os_cl32_keyboard.h
+	$(CC) $(CFLAGS) -I. -I$(ROOT)/src/services \
+		cl32_keyboard_test.c $(ROOT)/src/services/solar_os_cl32_keyboard.c -o $@
+
+battery_service_test: battery_service_test.c $(ROOT)/src/services/solar_os_battery.c $(ROOT)/src/services/solar_os_battery.h nvs.h freertos/FreeRTOS.h
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -include compat.h -I. -I$(ROOT)/src/services \
+		battery_service_test.c $(ROOT)/src/services/solar_os_battery.c -o $@
+
 midi_codec_test: midi_codec_test.c $(ROOT)/src/services/solar_os_midi_codec.c $(ROOT)/src/services/solar_os_midi_codec.h
 	$(CC) $(CFLAGS) -I$(ROOT)/src/services \
 		midi_codec_test.c $(ROOT)/src/services/solar_os_midi_codec.c -o $@
@@ -174,6 +231,18 @@ resources_test: resources_test.c $(ROOT)/src/services/solar_os_resources.c $(ROO
 	$(CC) $(CFLAGS) -D_GNU_SOURCE -include compat.h -I. -I$(ROOT)/src/services \
 		resources_test.c $(ROOT)/src/services/solar_os_resources.c -o $@
 
+expansion_registry_test: expansion_registry_test.c \
+		$(ROOT)/src/services/solar_os_expansion.c \
+		$(ROOT)/src/services/solar_os_expansion.h \
+		$(ROOT)/src/services/solar_os_memory.h \
+		expansion_stubs/solar_os_board.h expansion_stubs/solar_os_config.h \
+		expansion_stubs/driver/i2c_master.h \
+		expansion_stubs/driver/spi_master.h expansion_stubs/soc/soc_caps.h
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -ffunction-sections -fdata-sections \
+		-include compat.h -Iexpansion_stubs -I. -I$(ROOT)/include \
+		-I$(ROOT)/src -I$(ROOT)/src/services expansion_registry_test.c \
+		$(ROOT)/src/services/solar_os_expansion.c -Wl,--gc-sections -o $@
+
 audio_codec_test: audio_codec_test.c $(ROOT)/src/services/solar_os_audio_codec.c $(ROOT)/src/services/solar_os_audio_codec.h $(ROOT)/src/services/solar_os_audio_pcm.c $(ROOT)/src/services/solar_os_audio_pcm.h esp_err.h
 	$(CC) $(CFLAGS) -DSOLAR_OS_AUDIO_CODEC_HOST_TEST -I. -I$(ROOT)/src/services -I$(ROOT)/components/minimp3/include \
 		audio_codec_test.c $(ROOT)/src/services/solar_os_audio_codec.c \
@@ -201,6 +270,12 @@ agent_reference_test: agent_reference_test.c $(MANUAL_GENERATED_HEADER) $(ROOT)/
 	$(CC) $(CFLAGS) -Wno-comment -D_GNU_SOURCE -ffunction-sections -fdata-sections \
 		-I. -I$(MANUAL_GENERATED_DIR) -I$(ROOT)/src -I$(ROOT)/src/services \
 		agent_reference_test.c $(ROOT)/src/services/solar_os_agent_reference.c \
+		$(ROOT)/src/services/solar_os_manual.c -Wl,--gc-sections -o $@
+
+manual_external_metadata_test: manual_external_metadata_test.c $(MANUAL_GENERATED_HEADER) $(ROOT)/src/services/solar_os_manual.c $(ROOT)/src/services/solar_os_manual.h $(ROOT)/src/services/solar_os_docs.h
+	$(CC) $(CFLAGS) -Wno-comment -D_GNU_SOURCE -DSOLAR_OS_PACKAGE_SERVICE_DOCS=1 \
+		-ffunction-sections -fdata-sections -I. -I$(MANUAL_GENERATED_DIR) \
+		-I$(ROOT)/src -I$(ROOT)/src/services manual_external_metadata_test.c \
 		$(ROOT)/src/services/solar_os_manual.c -Wl,--gc-sections -o $@
 
 terminal_geometry_test: terminal_geometry_test.c $(ROOT)/src/services/solar_os_terminal_geometry.c $(ROOT)/src/services/solar_os_terminal_geometry.h
@@ -253,16 +328,52 @@ meshcore_stream_codec_test: meshcore_stream_codec_test.c \
 		meshcore_stream_codec_test.c \
 		$(ROOT)/src/services/solar_os_meshcore_stream_codec.c -o $@
 
+link_repeater_test: link_repeater_test.c \
+		$(ROOT)/src/services/solar_os_link_repeater.c \
+		$(ROOT)/src/services/solar_os_link_repeater.h \
+		$(ROOT)/src/services/solar_os_link.h esp_err.h
+	$(CC) $(CFLAGS) -I. -I$(ROOT)/src/services \
+		link_repeater_test.c \
+		$(ROOT)/src/services/solar_os_link_repeater.c -o $@
+
 time_timezone_test: time_timezone_test.c \
 		$(ROOT)/src/services/solar_os_timezone.c \
 		$(ROOT)/src/services/solar_os_timezone.h
 	$(CC) $(CFLAGS) -D_GNU_SOURCE -I$(ROOT)/src/services \
 		time_timezone_test.c $(ROOT)/src/services/solar_os_timezone.c -o $@
 
+rtc_service_test: rtc_service_test.c \
+		$(ROOT)/src/services/solar_os_rtc.c \
+		$(ROOT)/src/services/solar_os_rtc.h \
+		$(ROOT)/src/services/solar_os_time.h esp_err.h freertos/FreeRTOS.h
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I. -I$(ROOT)/src/services \
+		rtc_service_test.c $(ROOT)/src/services/solar_os_rtc.c -o $@
+
+schedule_test: schedule_test.c \
+		$(ROOT)/src/services/solar_os_schedule.c \
+		$(ROOT)/src/services/solar_os_schedule.h
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -include compat.h \
+		-Ischedule_stubs -I. -I$(ROOT)/src -I$(ROOT)/src/services \
+		schedule_test.c $(ROOT)/src/services/solar_os_schedule.c -o $@
+
+rtc_pcf85063_test: rtc_pcf85063_test.c \
+		$(ROOT)/src/drivers/rtc_pcf85063.c \
+		$(ROOT)/src/drivers/rtc_pcf85063.h \
+		rtc_stubs/solar_os_buses.h esp_err.h
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -Irtc_stubs -I. -I$(ROOT)/src/drivers \
+		rtc_pcf85063_test.c $(ROOT)/src/drivers/rtc_pcf85063.c -o $@
+
 test: $(TARGETS)
+	./ble_service_test
+	./ble_multi_peer_test
+	./ble_nimble_test
+	./ble_hid_test
+	./ble_lua_bindings_test
 	./writer_buffer_test
 	./writer_files_test
 	./sketch_canvas_test
+	./launcher_layout_test
+	./gfx_icons_test
 	./text_search_test
 	./doc_layout_test
 	./shell_parse_test
@@ -271,6 +382,7 @@ test: $(TARGETS)
 	./shell_completion_test
 	./shell_diag_test
 	./scheduler_test
+	./schedule_test
 	./script_lifecycle_test
 	./app_file_types_test
 	./gameboy_support_test
@@ -284,6 +396,8 @@ test: $(TARGETS)
 	./ps2_keyboard_test
 	./ps2_mouse_test
 	./cardkb_codec_test
+	./cl32_keyboard_test
+	./battery_service_test
 	./midi_codec_test
 	./midi_service_test
 	./parameters_test
@@ -292,11 +406,13 @@ test: $(TARGETS)
 	./dsp_test
 	./stream_test
 	./resources_test
+	./expansion_registry_test
 	./audio_codec_test
 	./webradio_catalog_test
 	./gif_decode_stack_test
 	./nvs_backup_test
 	./agent_reference_test
+	./manual_external_metadata_test
 	./terminal_geometry_test
 	./app_exit_result_test
 	./terminal_preferences_test
@@ -304,7 +420,10 @@ test: $(TARGETS)
 	./wireguard_crypto_test
 	./meshcore_channel_key_test
 	./meshcore_stream_codec_test
+	./link_repeater_test
 	./time_timezone_test
+	./rtc_service_test
+	./rtc_pcf85063_test
 
 clean:
 	$(RM) $(TARGETS)

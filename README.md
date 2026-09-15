@@ -24,7 +24,7 @@ SolarOS uses PlatformIO with ESP-IDF through the pioarduino Espressif32
 platform:
 
 ```sh
-pio run -e waveshare_esp32_s3_rlcd_4_2
+pio run -e solar_term
 pio run -e freenove_esp32_s3_display_4_0
 pio run -e elecrow_crowpanel_esp32_s3_4_2_epaper
 pio run -e odroid_go
@@ -38,10 +38,16 @@ The default build uses the full firmware flavor, except the 4 MB VGA32 target,
 which defaults to `rover`. For a smaller image or an explicit override:
 
 ```sh
-SOLAR_OS_FLAVOR=core pio run -e waveshare_esp32_s3_rlcd_4_2
+SOLAR_OS_FLAVOR=core pio run -e solar_term
 SOLAR_OS_FLAVOR=writerdeck pio run -e elecrow_crowpanel_esp32_s3_4_2_epaper
 SOLAR_OS_VGA_MODE=320x200 pio run -e ttgo_vga32_v14
 SOLAR_OS_VGA_MODE=320x240 pio run -e ttgo_vga32_v14
+```
+
+For an interactive board, update-layout, group, build, and flash workflow, run:
+
+```sh
+python3 scripts/os_builder.py
 ```
 
 The VGA32 target supports build-time `640x480` (default), `640x400`, `320x240`,

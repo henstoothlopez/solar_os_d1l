@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "solar_os_display.h"
@@ -19,7 +20,7 @@ typedef struct {
 } solar_os_ssd1306_device_t;
 
 static const char *TAG = "ssd1306";
-static solar_os_ssd1306_device_t devices[SOLAR_OS_SSD1306_MAX];
+static EXT_RAM_BSS_ATTR solar_os_ssd1306_device_t devices[SOLAR_OS_SSD1306_MAX];
 
 static solar_os_ssd1306_device_t *find_device(const char *name)
 {
@@ -110,12 +111,12 @@ static esp_err_t register_display_target(solar_os_ssd1306_device_t *device)
     strlcpy(target.driver, is_sh1106 ? "sh1106" : "ssd1306", sizeof(target.driver));
     strlcpy(target.controller, is_sh1106 ? "SH1106" : "SSD1306", sizeof(target.controller));
     strlcpy(target.role, "aux", sizeof(target.role));
-    target.width = SSD1306_WIDTH;
-    target.height = SSD1306_HEIGHT;
+    target.u8g2 = ssd1306_get_u8g2(&device->display);
+    target.width = u8g2_GetDisplayWidth(target.u8g2);
+    target.height = u8g2_GetDisplayHeight(target.u8g2);
     target.ready = true;
     target.brightness_supported = false;
     target.black_is_one = false;
-    target.u8g2 = ssd1306_get_u8g2(&device->display);
     return solar_os_display_register_target(&target);
 }
 

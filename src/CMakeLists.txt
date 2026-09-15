@@ -27,7 +27,7 @@ if(NOT DEFINED SOLAR_OS_BOARD OR SOLAR_OS_BOARD STREQUAL "")
     elseif(DEFINED ENV{PIOENV} AND NOT "$ENV{PIOENV}" STREQUAL "")
         set(SOLAR_OS_BOARD "$ENV{PIOENV}")
     else()
-        set(SOLAR_OS_BOARD "waveshare_esp32_s3_rlcd_4_2")
+        set(SOLAR_OS_BOARD "solar_term")
     endif()
 endif()
 
@@ -173,7 +173,24 @@ if(NOT DEFINED SOLAR_OS_FLAVOR OR SOLAR_OS_FLAVOR STREQUAL "")
     endif()
 endif()
 
-set(SOLAR_OS_FLAVOR_INPUT "${SOLAR_OS_PROJECT_DIR}/flavors/${SOLAR_OS_FLAVOR}.toml")
+if(NOT DEFINED SOLAR_OS_LAYOUT OR SOLAR_OS_LAYOUT STREQUAL "")
+    if(DEFINED ENV{SOLAR_OS_LAYOUT} AND NOT "$ENV{SOLAR_OS_LAYOUT}" STREQUAL "")
+        set(SOLAR_OS_LAYOUT "$ENV{SOLAR_OS_LAYOUT}")
+    else()
+        set(SOLAR_OS_LAYOUT "ota")
+    endif()
+endif()
+if(NOT SOLAR_OS_LAYOUT STREQUAL "ota" AND NOT SOLAR_OS_LAYOUT STREQUAL "single")
+    message(FATAL_ERROR "Unsupported SolarOS update layout: ${SOLAR_OS_LAYOUT}")
+endif()
+
+if(DEFINED SOLAR_OS_FLAVOR_FILE AND NOT SOLAR_OS_FLAVOR_FILE STREQUAL "")
+    get_filename_component(SOLAR_OS_FLAVOR_INPUT "${SOLAR_OS_FLAVOR_FILE}" ABSOLUTE)
+elseif(DEFINED ENV{SOLAR_OS_FLAVOR_FILE} AND NOT "$ENV{SOLAR_OS_FLAVOR_FILE}" STREQUAL "")
+    get_filename_component(SOLAR_OS_FLAVOR_INPUT "$ENV{SOLAR_OS_FLAVOR_FILE}" ABSOLUTE)
+else()
+    set(SOLAR_OS_FLAVOR_INPUT "${SOLAR_OS_PROJECT_DIR}/flavors/${SOLAR_OS_FLAVOR}.toml")
+endif()
 if(NOT EXISTS "${SOLAR_OS_FLAVOR_INPUT}")
     message(FATAL_ERROR "SolarOS flavor not found: ${SOLAR_OS_FLAVOR_INPUT}")
 endif()
@@ -232,13 +249,18 @@ endif()
 string(REPLACE ";" " " SOLAR_OS_BOARD_REQUIRED_PACKAGE_LIST
     "${SOLAR_OS_BOARD_REQUIRED_PACKAGES}"
 )
+if(NOT DEFINED SOLAR_OS_FLAVOR_NAME_OVERRIDE)
+    set(SOLAR_OS_FLAVOR_NAME_OVERRIDE "")
+endif()
 execute_process(
     COMMAND "${Python3_EXECUTABLE}"
             "${SOLAR_OS_PROJECT_DIR}/scripts/generate_flavor_config.py"
             "--input" "${SOLAR_OS_FLAVOR_INPUT}"
+            "--name-override" "${SOLAR_OS_FLAVOR_NAME_OVERRIDE}"
             "--packages" "${SOLAR_OS_PACKAGE_CATALOG}"
             "--board-capabilities" "${SOLAR_OS_BOARD_AVAILABLE_CAPABILITY_LIST}"
             "--board-required-packages" "${SOLAR_OS_BOARD_REQUIRED_PACKAGE_LIST}"
+            "--layout" "${SOLAR_OS_LAYOUT}"
             "--target" "${IDF_TARGET}"
             "--header" "${SOLAR_OS_GENERATED_HEADER}"
             "--cmake" "${SOLAR_OS_GENERATED_CMAKE}"
@@ -249,6 +271,7 @@ if(NOT SOLAR_OS_FLAVOR_GENERATE_RESULT EQUAL 0)
 endif()
 include("${SOLAR_OS_GENERATED_CMAKE}")
 message(STATUS "SolarOS flavor: ${SOLAR_OS_FLAVOR_NAME} (${SOLAR_OS_FLAVOR_INPUT})")
+message(STATUS "SolarOS update layout: ${SOLAR_OS_LAYOUT}")
 
 set(SOLAR_OS_MANUAL_INPUT "${SOLAR_OS_PROJECT_DIR}/doc/manual")
 set(SOLAR_OS_MANUAL_GENERATOR "${SOLAR_OS_PROJECT_DIR}/scripts/generate_manual.py")

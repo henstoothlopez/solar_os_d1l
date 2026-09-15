@@ -4,7 +4,7 @@ title = "Expansion hardware reference"
 section = "hardware"
 summary = "Resource rules, workflows, drivers, bindings, and wiring examples"
 aliases = ["hardware.expansion"]
-keywords = "expansion ports gpio adc pwm ledc audio buses i2c spi uart midi wiring displays neopixel ws2812 rgb led strip"
+keywords = "expansion ports gpio adc pwm ledc audio pcm1808 buses i2c spi uart midi wiring displays neopixel ws2812 rgb led strip"
 packages_any = []
 +++
 # Expansion Ports
@@ -49,9 +49,10 @@ while remaining blocked from runtime use.
 
 | Board | Physical expansion signals | Runtime GPIO and PWM | Runtime ADC | Connector restrictions |
 | --- | --- | --- | --- | --- |
-| Waveshare ESP32-S3-RLCD-4.2 | GPIO0-GPIO3, GPIO13, GPIO14, GPIO17-GPIO20, GPIO43, GPIO44 | GPIO1-GPIO3, GPIO17 | GPIO1-GPIO3, GPIO17 | GPIO0 is BOOT; GPIO13/GPIO14 are I2C; GPIO18 is KEY; GPIO19/GPIO20 are native USB; GPIO43/GPIO44 belong to `uart0` by default. |
+| SolarTerm (Waveshare ESP32-S3-RLCD-4.2) | GPIO0-GPIO3, GPIO13, GPIO14, GPIO17-GPIO20, GPIO43, GPIO44 | GPIO1-GPIO3, GPIO17 | GPIO1-GPIO3, GPIO17 | GPIO0 is BOOT; GPIO13/GPIO14 are I2C; GPIO18 is KEY; GPIO19/GPIO20 are native USB; GPIO43/GPIO44 belong to `uart0` by default. |
 | ESP32-S3 Display 4.0-inch (FNK0104S) | GPIO2, GPIO3, GPIO14-GPIO16, GPIO21, GPIO43, GPIO44 | GPIO2, GPIO3, GPIO14, GPIO21 | GPIO2, GPIO3, GPIO14 | GPIO15/GPIO16 are shared I2C; GPIO43/GPIO44 belong to `uart0`; GPIO4 is fixed audio MCLK, not a connector GPIO. |
 | Elecrow CrowPanel ESP32-S3 4.2-inch E-paper | GPIO3, GPIO8, GPIO9, GPIO14-GPIO21, GPIO38 | GPIO8, GPIO9, GPIO14-GPIO21, GPIO38 | GPIO8, GPIO9, GPIO14-GPIO20 | GPIO3 is physically exposed but blocked as a strapping pin. |
+| CL-32 | GPIO1-GPIO4, GPIO8, GPIO15-GPIO21, GPIO35-GPIO44, GPIO46-GPIO48 | GPIO4, GPIO8, GPIO15-GPIO18, GPIO21, GPIO38-GPIO42, GPIO47, GPIO48 | GPIO4, GPIO8, GPIO15-GPIO18 | GPIO1/GPIO2 are shared I2C; GPIO3 is the shared peripheral interrupt; GPIO19/GPIO20 are USB; GPIO35-GPIO37 are Octal PSRAM; GPIO43/GPIO44 belong to `uart0`; GPIO46 is an input-only strapping signal. EX1 uses a proprietary M.2 pinout. |
 | ESP32-S3-DevKitC-1-N16R8 | ESP32-S3 signals broken out on the DevKitC headers | GPIO1, GPIO2, GPIO4-GPIO7, GPIO10, GPIO14-GPIO18, GPIO21, GPIO39-GPIO42, GPIO47 | GPIO1, GPIO2, GPIO4-GPIO7, GPIO10, GPIO14-GPIO18 | GPIO0 is BOOT/KEY; GPIO3/GPIO45/GPIO46 are other strapping pins; GPIO19/GPIO20 are native USB; GPIO35-GPIO37 are Octal PSRAM; GPIO38/GPIO48 are reserved for either RGB LED revision; GPIO43/GPIO44 are `uart0`. |
 | ESP32-S3 DevKitC-1 E-paper Workbench | ESP32-S3 signals broken out on the DevKitC headers | GPIO6, GPIO7, GPIO14, GPIO18, GPIO21, GPIO39-GPIO42, GPIO47 | GPIO6, GPIO7, GPIO14, GPIO18 | GPIO1/GPIO2/GPIO4/GPIO5 belong to the fixed storage SPI bus; GPIO10/GPIO15-GPIO17 belong to the fixed e-paper display; the remaining DevKitC restrictions are unchanged. |
 | ODROID-GO | External IO GPIO4 and GPIO15 | GPIO4, GPIO15 | None | Both pins are also the allowed external chip-select slots on the shared VSPI bus. |
@@ -66,9 +67,10 @@ voltage and current requirements before connecting it.
 
 | Board | Board-defined buses | Runtime-routable buses | Notes |
 | --- | --- | --- | --- |
-| Waveshare ESP32-S3-RLCD-4.2 | `i2c0`: SDA GPIO13, SCL GPIO14; `spi0`: SCK GPIO11, MOSI GPIO12, CS GPIO40; `uart0`: TX GPIO43, RX GPIO44 | I2C on `i2c1`, SPI on `spi3`, UART on `uart1`/`uart2`, or 1-Wire, using approved free pins | `spi0` is the fixed internal display bus; its pins are not expansion pins. |
+| SolarTerm (Waveshare ESP32-S3-RLCD-4.2) | `i2c0`: SDA GPIO13, SCL GPIO14; `spi0`: SCK GPIO11, MOSI GPIO12, CS GPIO40; `uart0`: TX GPIO43, RX GPIO44 | I2C on `i2c1`, SPI on `spi3`, UART on `uart1`/`uart2`, or 1-Wire, using approved free pins | `spi0` is the fixed internal display bus; its pins are not expansion pins. |
 | ESP32-S3 Display 4.0-inch (FNK0104S) | `i2c0`: SDA GPIO16, SCL GPIO15; `spi0`: SCK GPIO12, MOSI GPIO11, CS GPIO10; `uart0`: TX GPIO43, RX GPIO44 | I2C on `i2c1`, SPI on `spi3`, UART on `uart1`/`uart2`, I2S on `i2s1`, or 1-Wire, using approved free pins | The I2C connector shares `i2c0` with touch and audio control. `spi0` is the fixed internal LCD bus. |
 | Elecrow CrowPanel ESP32-S3 4.2-inch E-paper | `spi0`: SCK GPIO12, MOSI GPIO11, CS GPIO45; `uart0`: TX GPIO43, RX GPIO44 | I2C on `i2c0`/`i2c1`, SPI on `spi3`, UART on `uart1`/`uart2`, or named 1-Wire, using approved free pins | `spi0` is the fixed internal SSD1683 bus. SPI3 is shared with microSD and is available for a runtime expansion bus only while the SD card is unmounted. |
+| CL-32 | `i2c0`: SDA GPIO1, SCL GPIO2; `spi0`: SCK GPIO9, MISO GPIO11, MOSI GPIO10, display CS GPIO6, microSD CS GPIO7; `uart0`: TX GPIO43, RX GPIO44 | I2C on `i2c1`, SPI on `spi3`, UART on `uart1`/`uart2`, I2S on `i2s1`, or 1-Wire, using approved free pins | EX1, CN1, and CN2 expose the shared `i2c0`; EX1 exposes `uart0`. The internal `core0`, ST7305 display, and microSD attach automatically. `core0` supplies `keyboard0` from the AVR event FIFO and `battery0` from its voltage and power-status registers; the display and microSD share `spi0` with separate chip selects. |
 | ESP32-S3-DevKitC-1-N16R8 | `i2c0`: SDA GPIO8, SCL GPIO9; `spi0`: SCK GPIO12, MISO GPIO13, MOSI GPIO11, CS GPIO4/GPIO10/GPIO5/GPIO6/GPIO7; `uart0`: TX GPIO43, RX GPIO44 | I2C on `i2c1`, SPI on `spi3`, UART on `uart1`/`uart2`, or 1-Wire, using approved free pins | The board-defined `spi0` is the normal expansion SPI bus. |
 | ESP32-S3 DevKitC-1 E-paper Workbench | `i2c0`: SDA GPIO8, SCL GPIO9; `spi0`: SCK GPIO12, MISO GPIO13, MOSI GPIO11, CS GPIO10/GPIO6/GPIO7; `spi1`: SCK GPIO1, MISO GPIO4, MOSI GPIO2, CS GPIO5; `uart0`: TX GPIO43, RX GPIO44 | I2C on `i2c1`, UART on `uart1`/`uart2`, I2S on `i2s1`, or 1-Wire, using approved free pins | `keyboard0`, `display0`, and `storage0` attach automatically. Both SPI hosts are assigned to fixed buses. |
 | ODROID-GO | `spi0`: SCK GPIO18, MISO GPIO19, MOSI GPIO23, CS GPIO5/GPIO15/GPIO4; `uart0`: TX GPIO1, RX GPIO3 | UART on `uart1`/`uart2`, or named 1-Wire, using approved free pins | VSPI is shared with onboard TFT and SD devices; external devices use their own allowed CS slot. |
@@ -242,12 +244,13 @@ Run `expansion drivers` on the device to see the exact compiled set.
 | `ssd1683` | 400x300 monochrome e-paper | `spi=<bus> cs=<pin> dc=<pin> reset=<pin> busy=<pin>`; optional `power=<pin> clock=<khz> rotation=<0..3> panel=<0..3>` | Registers an auxiliary target, or Elecrow's fixed `display0`, with auto, fast, and full refresh modes. Panel 0 auto-detects the Elecrow revision; 1 is legacy Elecrow, 2 is green-sticker Elecrow, and 3 is Waveshare V2. |
 | `ssd1306` | 128x64 I2C OLED | `i2c=<bus> addr=<address>` | Registers an auxiliary display target. |
 | `sh1106` | 128x64 I2C OLED with SH1106 addressing | `i2c=<bus> addr=<address>` | Registers an auxiliary display target with the two-column offset. |
-| `st7305` | 400x300 reflective LCD | `spi=<bus> cs=<pin> dc=<pin> reset=<pin>` | ESP32 and ESP32-S3; Waveshare registers it as fixed `display0`. |
+| `st7305` | 400x300 or 384x168 reflective LCD | `spi=<bus> cs=<pin> dc=<pin> reset=<pin>`; optional `panel=0|1 rotation=1|3` | ESP32 and ESP32-S3. Panel 0 is the native 300x400 Waveshare panel; panel 1 is the native 168x384 CL-32 panel. Both boards register their panel as fixed `display0`. |
 | `ili9341` | 320x240 color TFT | `spi=<bus> cs=<pin> dc=<pin>`; optional `reset=<pin> bl=<pin> active=0|1 pwm=0|1` | ESP32 and ESP32-S3; ODROID-GO registers it as fixed `display0`. |
 | `st7796` | 480x320 color TFT | `spi=<bus> cs=<pin> dc=<pin>`; optional `reset=<pin> bl=<pin> active=0|1 pwm=0|1` | ESP32 and ESP32-S3; Freenove registers it as fixed `display0`. |
 | `cvbs-pal` | 384x288 or 320x200 monochrome PAL composite output | `i2s=i2s0 out=gpio25` | Classic ESP32 driver; ESP32-WROVER v3.0 registers it as fixed `display0`. |
 | `vga32` | Build-selected RGB222 VGA output | `r0=<pin> r1=<pin> g0=<pin> g1=<pin> b0=<pin> b1=<pin> hsync=<pin> vsync=<pin>` | Classic ESP32 driver; claims I2S1 and TTGO VGA32 registers it as fixed `display0`. |
 | `cardkb` | M5Stack Unit CardKB | `i2c=<bus> addr=0x5f` | Polls released keys into the shared input service for shells and foreground apps. |
+| `cl32-core` | Integrated CL-32 ATmega808 controller | `i2c=<bus> addr=0x08` | Fixed CL-32-only `core0`; polls keyboard press/release events into `keyboard0` and provides `battery0` from the AVR voltage, USB-power, and charging state. It is not runtime-probeable or detachable. |
 | `gpio-keys` | Active-low pull-up buttons | One or more `key:<name>=<gpio>` bindings | Publishes press/release keyboard events and releases all GPIO claims on detach. |
 | `ps2-keyboard` | PS/2 scan-code set 2 keyboard | `ps2=<bus>` | Publishes canonical keyboard press/release events from an exclusive PS/2 bus. |
 | `ps2-mouse` | Standard three-button PS/2 mouse | `ps2=<bus>` | Enables reporting and publishes relative pointer motion and button events. |
@@ -257,6 +260,7 @@ Run `expansion drivers` on the device to see the exact compiled set.
 | `sdspi` | SPI microSD card adapter | `spi=<bus> cs=<pin>` | On boards without built-in SD, mounts removable FAT storage at `/sdcard`; run `disk umount` before detach. |
 | `neopixel` | WS2812/NeoPixel GRB strip | `data=<pin> count=<1..256>` | Claims the data GPIO and registers a named strip for the `neopixel` command and script API. |
 | `audio-pwm` | LEDC PWM mono audio output | `pwm=<pin>` | Claims the PWM GPIO and registers a 16 kHz mono playback device. One instance can be attached. |
+| `pcm1808` | PCM1808 four-wire I2S ADC | `mclk=<pin> bck=<pin> ws=<pin> dout=<pin>` | Requires `expansion_i2s`, claims four GPIOs and a runtime I2S controller, then registers a 16 kHz stereo capture device and stream. One instance can be attached. |
 | `pcm5102` | PCM5102A three-wire I2S DAC | `bck=<pin> din=<pin> rck=<pin>` | Requires `expansion_i2s`, claims three GPIOs and I2S1, then registers a 16 kHz stereo playback device and stream. One instance can be attached. |
 | `es8311-es7210` | ES8311 playback with ES7210 capture | `i2c=<bus> i2s=<port> mclk=<pin> bck=<pin> ws=<pin> din=<pin> dout=<pin> pa=<pin>` | ESP32-S3 primary audio backend with stereo capture and playback. Waveshare registers it as fixed `audio0`. |
 | `es8311-duplex` | ES8311 duplex codec | `i2c=<bus> i2s=<port> mclk=<pin> bck=<pin> ws=<pin> din=<pin> dout=<pin> pa=<pin>` | ESP32-S3 primary audio backend with mono codec capture and playback. Freenove registers it as fixed `audio0`. |
@@ -362,6 +366,38 @@ PCM5102A output is line level: use a powered input or a suitable amplifier, not
 a passive speaker. Stop playback before detaching; detach reports busy while
 the playback stream is open. Run `audio default auto` after testing to restore
 automatic output selection.
+
+### PCM1808 I2S audio input
+
+The driver makes the ESP32 the I2S clock master. Configure the PCM1808 mode
+pins before power-up: `MD1=LOW`, `MD0=LOW` selects slave mode and `FMT=LOW`
+selects 24-bit Philips I2S. Wire the driver MCLK signal to the module's SCKI or
+SCK pin. The PCM1808 mode pins are hardware straps, not runtime driver GPIOs:
+
+```text
+PCM1808 +5V -> SolarOS 5V               PCM1808 3.3V -> SolarOS 3.3V
+PCM1808 GND -> SolarOS GND
+PCM1808 MD1 -> GND                      PCM1808 MD0 -> GND
+PCM1808 FMT -> GND                      PCM1808 SCKI/SCK -> GPIO1
+PCM1808 BCK -> GPIO2                    PCM1808 LRCK -> GPIO3
+PCM1808 DOUT -> GPIO17
+
+expansion attach pcm1808 adc0 mclk=gpio1 bck=gpio2 ws=gpio3 dout=gpio17
+audio device adc0
+arecord -d 5 -i adc0.capture /sdcard/pcm1808.wav
+```
+
+The example uses all four runtime-safe Waveshare expansion GPIOs. The driver
+generates 4.096 MHz MCLK and 64 BCK cycles per 16 kHz stereo frame. It receives
+the converter's 24-bit I2S slots, keeps the most-significant 16 bits, and
+publishes `adc0.capture` as an exclusive signed 16-bit stereo PCM source. It
+uses the board's runtime I2S controller (I2S1 on current ESP32-S3 profiles), so
+it can coexist with fixed onboard audio on I2S0 but not with another attachment
+that owns I2S1. Stop recording before detach. A raw PCM1808 circuit requires
+the analog supply, digital supply, reference components, and input network from
+the manufacturer reference design; follow the breakout's own supply markings
+when using a module. Common modules expose separate `+5V` analog and `3.3V`
+digital supply pins; both rails must be powered.
 
 ## Wiring Examples
 
@@ -496,7 +532,7 @@ FSK/OOK unlimited FIFO-stream mode used by services such as POCSAG.
 The driver polls the radio status registers, so DIO0/IRQ is optional. An IRQ
 binding can still be reserved for future interrupt-driven operation.
 
-### SSD1306 or SH1106 on Waveshare ESP32-S3-RLCD-4.2
+### SSD1306 or SH1106 on SolarTerm
 
 ```text
 VCC -> 3V3        GND -> GND

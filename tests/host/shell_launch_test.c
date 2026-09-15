@@ -61,9 +61,17 @@ int main(void)
     char *aplay_before[] = {"aplay", "-v", "80", "audio/song.mp3"};
     char *aplay_after[] = {"aplay", "audio/song.mp3", "-v", "80"};
     char *arecord[] = {"arecord", "-d", "10", "audio/note.wav"};
+    char *arecord_input[] = {
+        "arecord", "-i", "adc0.capture", "audio/note.wav",
+    };
+    char *arecord_duration_input[] = {
+        "arecord", "-d", "10", "-i", "adc0.capture", "audio/note.wav",
+    };
     assert(path_arg(4, aplay_before) == 3);
     assert(path_arg(4, aplay_after) == 1);
     assert(path_arg(4, arecord) == 3);
+    assert(path_arg(4, arecord_input) == 3);
+    assert(path_arg(6, arecord_duration_input) == 5);
 
     char *view[] = {"view", "--actual", "images/photo.png"};
     assert(path_arg(3, view) == 2);
@@ -79,6 +87,9 @@ int main(void)
     assert(path_arg(2, files) == 1);
     assert(path_arg(2, launcher) == -1);
     assert(path_arg(3, launcher_path) == 2);
+
+    char *graphical_launcher[] = {"launcher", "menus/work.json"};
+    assert(path_arg(2, graphical_launcher) == 1);
 
     assert(solar_os_shell_path_is_script("./startup.sh"));
     assert(solar_os_shell_path_is_script("MENU.SH"));

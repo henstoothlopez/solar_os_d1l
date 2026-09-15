@@ -49,6 +49,27 @@ class ScriptAudioBindingsTest(unittest.TestCase):
         self.assertIn("const size_t read_bytes = block_frames * frame_bytes", capture)
         self.assertGreaterEqual(capture.count("solar_os_stream_close(&stream);"), 3)
 
+    def test_tone_uses_the_selected_default_output_stream(self):
+        tone = AUDIO_SOURCE.split(
+            "static esp_err_t audio_play_tone_locked(", 1
+        )[1].split("esp_err_t solar_os_audio_play_tone(", 1)[0]
+        self.assertIn("solar_os_audio_open_default(", tone)
+        self.assertIn("SOLAR_OS_STREAM_DIRECTION_SINK", tone)
+        self.assertIn("SOLAR_OS_STREAM_AUDIO_S16_LE", tone)
+        self.assertIn("solar_os_audio_set_device_volume(device.id, volume)", tone)
+        self.assertIn("solar_os_stream_write(&stream", tone)
+        self.assertIn("format.sample_rate", tone)
+        self.assertIn("format.channels", tone)
+        self.assertIn("solar_os_stream_close(&stream);", tone)
+        self.assertNotIn("solar_os_board_audio_get_status", tone)
+        self.assertNotIn("solar_os_board_audio_write", tone)
+
+        enqueue = AUDIO_SOURCE.split(
+            "esp_err_t solar_os_audio_tone_enqueue(", 1
+        )[1].split("esp_err_t solar_os_audio_tone_cancel(", 1)[0]
+        self.assertIn("solar_os_audio_output_available()", enqueue)
+        self.assertNotIn("SOLAR_OS_AUDIO_BACKEND_PACKAGE", enqueue)
+
     def test_python_and_lua_return_the_same_format_fields(self):
         fields = (
             "sample_format",
@@ -61,6 +82,33 @@ class ScriptAudioBindingsTest(unittest.TestCase):
             self.assertIn(f'"{field}"', LUA_SOURCE)
         self.assertIn("mp_obj_new_tuple(2, result)", PYTHON_SOURCE)
         self.assertIn("return 2;", LUA_SOURCE)
+
+    def test_python_and_lua_accept_i2s_capture_pins(self):
+        for source in (PYTHON_SOURCE, LUA_SOURCE):
+            known_keys = source.split("expansion_key_known", 1)[1].split("};", 1)[0]
+            self.assertIn(
+                '{"mclk", "mclk", SOLAR_OS_EXPANSION_BINDING_GPIO}', source
+            )
+            self.assertIn(
+                '{"ws", "ws", SOLAR_OS_EXPANSION_BINDING_GPIO}', source
+            )
+            self.assertIn(
+                '{"dout", "dout", SOLAR_OS_EXPANSION_BINDING_GPIO}', source
+            )
+            for key in ("mclk", "ws", "dout"):
+                self.assertIn(f'"{key}"', known_keys)
+
+    def test_python_and_lua_accept_t_lora_device_pins(self):
+        expected = (
+            '{"backlight", "backlight", SOLAR_OS_EXPANSION_BINDING_PWM}',
+            '{"a", "a", SOLAR_OS_EXPANSION_BINDING_GPIO}',
+            '{"b", "b", SOLAR_OS_EXPANSION_BINDING_GPIO}',
+        )
+        for source in (PYTHON_SOURCE, LUA_SOURCE):
+            known_keys = source.split("expansion_key_known", 1)[1].split("};", 1)[0]
+            for key, binding in zip(("backlight", "a", "b"), expected):
+                self.assertIn(f'"{key}"', known_keys)
+                self.assertIn(binding, source)
 
 
 if __name__ == "__main__":

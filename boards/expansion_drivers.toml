@@ -20,6 +20,78 @@ hint = "0x5f"
 required = true
 allowed = [0x5f]
 
+[drivers.tca8418]
+summary = "4x10 matrix keyboard"
+package = "tca8418"
+targets = ["esp32s3"]
+capabilities = ["i2c", "pwm"]
+default_name = "keyboard0"
+
+[[drivers.tca8418.bindings]]
+key = "i2c"
+kind = "i2c_bus"
+hint = "bus"
+required = true
+
+[[drivers.tca8418.bindings]]
+key = "addr"
+kind = "i2c_address"
+hint = "0x34"
+required = true
+allowed = [0x34]
+
+[[drivers.tca8418.bindings]]
+key = "irq"
+kind = "gpio"
+hint = "gpio"
+
+[[drivers.tca8418.bindings]]
+key = "backlight"
+kind = "pwm"
+hint = "gpio"
+
+[drivers.cl32-core]
+summary = "CL-32 board controller"
+package = "board_cl32_core"
+targets = ["esp32s3"]
+capabilities = ["i2c"]
+board_capabilities = ["battery"]
+default_name = "core0"
+
+[[drivers.cl32-core.bindings]]
+key = "i2c"
+kind = "i2c_bus"
+hint = "bus"
+required = true
+
+[[drivers.cl32-core.bindings]]
+key = "addr"
+kind = "i2c_address"
+hint = "0x08"
+required = true
+allowed = [0x08]
+
+[drivers.tlora-pager-core]
+summary = "T-LoRa-Pager XL9555 power sequencer"
+package = "tlora_pager_core"
+targets = ["esp32s3"]
+capabilities = ["i2c"]
+early = true
+default_name = "core0"
+
+[[drivers.tlora-pager-core.bindings]]
+key = "i2c"
+kind = "i2c_bus"
+hint = "bus"
+required = true
+
+[[drivers.tlora-pager-core.bindings]]
+key = "addr"
+kind = "i2c_address"
+hint = "0x20"
+required = true
+allowed = [0x20]
+
 [drivers.ssd1683]
 summary = "400x300 e-paper"
 package = "expansion_ssd1683"
@@ -217,7 +289,7 @@ hint = "gpio"
 required = true
 
 [drivers.st7305]
-summary = "400x300 reflective LCD"
+summary = "ST7305 reflective LCD"
 package = "driver_display_st7305"
 targets = ["esp32", "esp32s3"]
 capabilities = ["gfx", "expansion_spi", "expansion_gpio"]
@@ -246,6 +318,19 @@ key = "reset"
 kind = "gpio"
 hint = "gpio"
 required = true
+[[drivers.st7305.bindings]]
+key = "panel"
+kind = "parameter"
+role = "panel"
+hint = "0|1"
+min = 0
+max = 1
+[[drivers.st7305.bindings]]
+key = "rotation"
+kind = "parameter"
+role = "rotation"
+hint = "1|3"
+allowed = [1, 3]
 
 [drivers.ili9341]
 summary = "320x240 color TFT"
@@ -465,6 +550,10 @@ kind = "i2c_address"
 hint = "0x51"
 required = true
 allowed = [0x51]
+[[drivers.pcf85063.bindings]]
+key = "irq"
+kind = "gpio"
+hint = "gpio"
 
 [drivers.shtc3]
 summary = "temperature/humidity"
@@ -560,6 +649,35 @@ hint = "gpio"
 required = true
 [[drivers.pcm5102.bindings]]
 key = "rck"
+kind = "gpio"
+hint = "gpio"
+required = true
+
+[drivers.pcm1808]
+summary = "I2S stereo audio input"
+package = "expansion_pcm1808"
+targets = ["esp32", "esp32s3"]
+capabilities = ["expansion_i2s"]
+board_capabilities = ["audio_input"]
+board_driver = "audio_expansion"
+default_name = "audio0"
+[[drivers.pcm1808.bindings]]
+key = "mclk"
+kind = "gpio"
+hint = "gpio"
+required = true
+[[drivers.pcm1808.bindings]]
+key = "bck"
+kind = "gpio"
+hint = "gpio"
+required = true
+[[drivers.pcm1808.bindings]]
+key = "ws"
+kind = "gpio"
+hint = "gpio"
+required = true
+[[drivers.pcm1808.bindings]]
+key = "dout"
 kind = "gpio"
 hint = "gpio"
 required = true
@@ -660,7 +778,7 @@ required = true
 key = "pa"
 kind = "gpio"
 hint = "gpio"
-required = true
+required = false
 
 [drivers.esp32-dac]
 summary = "ESP32 internal DAC audio"
@@ -939,3 +1057,78 @@ key = "rotation"
 kind = "parameter"
 hint = "0..3"
 allowed = [0, 1, 2, 3]
+
+[drivers.sx1262]
+summary = "SX1262 LoRa/(G)FSK radio"
+package = "sx1262"
+targets = ["esp32s3"]
+capabilities = ["spi"]
+default_name = "radio0"
+
+[[drivers.sx1262.bindings]]
+key = "spi"
+kind = "spi_bus"
+hint = "bus"
+required = true
+
+[[drivers.sx1262.bindings]]
+key = "cs"
+kind = "spi_cs"
+hint = "gpio"
+required = true
+
+[[drivers.sx1262.bindings]]
+key = "busy"
+kind = "gpio"
+hint = "gpio"
+required = true
+
+[[drivers.sx1262.bindings]]
+key = "reset"
+kind = "gpio"
+hint = "gpio"
+
+[[drivers.sx1262.bindings]]
+key = "irq"
+kind = "gpio"
+hint = "gpio"
+
+[drivers.rotary-encoder]
+summary = "Quadrature rotary encoder (Up/Down per detent)"
+package = "rotary_encoder"
+targets = ["esp32", "esp32s3"]
+capabilities = ["gpio"]
+default_name = "wheel0"
+
+[[drivers.rotary-encoder.bindings]]
+key = "a"
+kind = "gpio"
+hint = "gpio"
+required = true
+
+[[drivers.rotary-encoder.bindings]]
+key = "b"
+kind = "gpio"
+hint = "gpio"
+required = true
+
+[drivers.bq27220]
+summary = "BQ27220 fuel gauge"
+package = "bq27220"
+targets = ["esp32s3"]
+capabilities = ["i2c"]
+board_capabilities = ["battery"]
+default_name = "battery0"
+
+[[drivers.bq27220.bindings]]
+key = "i2c"
+kind = "i2c_bus"
+hint = "bus"
+required = true
+
+[[drivers.bq27220.bindings]]
+key = "addr"
+kind = "i2c_address"
+hint = "0x55"
+required = true
+allowed = [0x55]
