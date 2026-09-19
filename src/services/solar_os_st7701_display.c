@@ -7,6 +7,11 @@
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h" /* added 2026-09-17 for the boot-log checkpoints and
+                         error-propagation logging below */
+#include "esp_rom_sys.h" /* esp_rom_delay_us() — added 2026-09-16 for the
+                             ST7701S bit-bang timing-margin fix, see
+                             st7701_spi_write_9bit() below */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "rgb_st7701.h"
@@ -24,6 +29,18 @@
 #define D1L_LCD_CS_PIN 4
 #define D1L_LCD_RST_PIN 5
 #define D1L_LCD_RESET_PULSE_US 10000 /* 10ms — matches Launcher port timing */
+
+static const char *TAG = "solar_os_st7701";
+
+/* Set this to 1 (or pass -DSOLAR_OS_D1L_ST7701_TEST_FRAME=1 as a build
+ * flag) to push one solid-color RGB565 frame straight to the panel right
+ * after panel init, bypassing all SolarOS/u8g2 rendering entirely. Added
+ * 2026-09-17 per code-review item 7: this separates "panel/backlight/
+ * RGB-timing problem" from "SolarOS rendering-path problem" during
+ * hardware bring-up. Turn back off once a real image is confirmed. */
+#ifndef SOLAR_OS_D1L_ST7701_TEST_FRAME
+#define SOLAR_OS_D1L_ST7701_TEST_FRAME 1
+#endif
 
 typedef struct {
     bool active;
@@ -140,31 +157,86 @@ static esp_err_t parse_bindings(const solar_os_expansion_binding_t *bindings,
                                     platformio.ini's own comment */
 #define D1L_ST7701_MOSI_PIN 48  /* = LORA_MOSI */
 
+/* TIMING-MARGIN FIX, added 2026-09-16 (see 09-14/09-16 handoff docs):
+ * every gpio_set_level() call below is followed by esp_rom_delay_us(1).
+ * Arduino's digitalWrite() had enough call overhead to incidentally act
+ * as setup/hold time for this bit-banged 9-bit protocol; ESP-IDF's
+ * gpio_set_level() is a much more direct register write and may not
+ * leave the panel enough time to latch each bit. This is the #1
+ * candidate fix for the black-screen/no-backlight symptom per the
+ * 09-14 handoff's own "TUNE ON HARDWARE" note in this exact function.
+ * If the panel comes up correctly after this change, these delays can
+ * later be trimmed/removed one at a time to find the real minimum
+ * margin needed -- leave them in for now while confirming this is
+ * actually the fix. */
 static inline void st7701_spi_write_9bit(uint8_t dc, uint8_t data)
 {
     gpio_set_level(D1L_ST7701_SCK_PIN, 0);
+    esp_rom_delay_us(1);
     gpio_set_level(D1L_ST7701_MOSI_PIN, dc ? 1 : 0);
+    esp_rom_delay_us(1);
     gpio_set_level(D1L_ST7701_SCK_PIN, 1);
+    esp_rom_delay_us(1);
     for (int i = 7; i >= 0; i--) {
         gpio_set_level(D1L_ST7701_SCK_PIN, 0);
+        esp_rom_delay_us(1);
         gpio_set_level(D1L_ST7701_MOSI_PIN, (data >> i) & 1 ? 1 : 0);
+        esp_rom_delay_us(1);
         gpio_set_level(D1L_ST7701_SCK_PIN, 1);
+        esp_rom_delay_us(1);
     }
 }
 
-static void st7701_lcd_cmd(uint8_t cmd)
+/* FIXED 2026-09-17 (code-review item 2, HIGH): these used to be void and
+ * silently discarded the TCA9535 CS-write results. That meant a wrong
+ * expander address, an uninitialized I2C bus, or any single failed write
+ * would let run_preinit_sequence() run to completion and return ESP_OK
+ * regardless — making a real hardware init failure look identical to "the
+ * display is blank for some other reason". Now both propagate the real
+ * esp_err_t so a bad transaction anywhere in the ~300-toggle sequence
+ * stops the sequence immediately instead of being silently ignored. */
+static esp_err_t st7701_lcd_cmd(uint8_t cmd)
 {
-    d1l_expander_write_fast(D1L_LCD_CS_PIN, false);
+    esp_err_t err = d1l_expander_write_fast(D1L_LCD_CS_PIN, false);
+    if (err != ESP_OK) {
+        return err;
+    }
     st7701_spi_write_9bit(0, cmd);
-    d1l_expander_write_fast(D1L_LCD_CS_PIN, true);
+    return d1l_expander_write_fast(D1L_LCD_CS_PIN, true);
 }
 
-static void st7701_lcd_data(uint8_t data)
+static esp_err_t st7701_lcd_data(uint8_t data)
 {
-    d1l_expander_write_fast(D1L_LCD_CS_PIN, false);
+    esp_err_t err = d1l_expander_write_fast(D1L_LCD_CS_PIN, false);
+    if (err != ESP_OK) {
+        return err;
+    }
     st7701_spi_write_9bit(1, data);
-    d1l_expander_write_fast(D1L_LCD_CS_PIN, true);
+    return d1l_expander_write_fast(D1L_LCD_CS_PIN, true);
 }
+
+/* Wrap every command/data byte in the sequence below with these so a
+ * failure at any single byte logs exactly which command/byte failed and
+ * aborts the sequence immediately, instead of continuing on regardless
+ * (see the fix note on st7701_lcd_cmd()/st7701_lcd_data() above). Requires
+ * a local `esp_err_t err;` in scope, which run_preinit_sequence() already
+ * declares. */
+#define ST7701_CMD(c) do { \
+        err = st7701_lcd_cmd(c); \
+        if (err != ESP_OK) { \
+            ESP_LOGE(TAG, "ST7701S pre-init: cmd 0x%02X failed at %s:%d: %s", \
+                     (unsigned)(c), __FILE__, __LINE__, esp_err_to_name(err)); \
+            return err; \
+        } \
+    } while (0)
+#define ST7701_DATA(d) do { \
+        err = st7701_lcd_data(d); \
+        if (err != ESP_OK) { \
+            ESP_LOGE(TAG, "ST7701S pre-init: data 0x%02X failed at %s:%d: %s", \
+                     (unsigned)(d), __FILE__, __LINE__, esp_err_to_name(err)); \
+            return err; \
+        } \
+    } while (0)
 
 static esp_err_t run_preinit_sequence(void)
 {
@@ -182,89 +254,93 @@ static esp_err_t run_preinit_sequence(void)
     if (err != ESP_OK) {
         return err;
     }
+    ESP_LOGI(TAG, "TCA9535 write for LCD_CS succeeded (expander is responding)");
 
     gpio_set_level(D1L_ST7701_SCK_PIN, 1);
+    esp_rom_delay_us(1);
     gpio_set_level(D1L_ST7701_MOSI_PIN, 0);
+    esp_rom_delay_us(1);
 
     /* Command2 BK0 */
-    st7701_lcd_cmd(0xFF); st7701_lcd_data(0x77); st7701_lcd_data(0x01); st7701_lcd_data(0x00); st7701_lcd_data(0x00); st7701_lcd_data(0x10);
+    ST7701_CMD(0xFF); ST7701_DATA(0x77); ST7701_DATA(0x01); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x10);
 
-    st7701_lcd_cmd(0xC0); st7701_lcd_data(0x3B); st7701_lcd_data(0x00);
-    st7701_lcd_cmd(0xC1); st7701_lcd_data(0x0D); st7701_lcd_data(0x02);
-    st7701_lcd_cmd(0xC2); st7701_lcd_data(0x31); st7701_lcd_data(0x05);
-    st7701_lcd_cmd(0xCD); st7701_lcd_data(0x08);
+    ST7701_CMD(0xC0); ST7701_DATA(0x3B); ST7701_DATA(0x00);
+    ST7701_CMD(0xC1); ST7701_DATA(0x0D); ST7701_DATA(0x02);
+    ST7701_CMD(0xC2); ST7701_DATA(0x31); ST7701_DATA(0x05);
+    ST7701_CMD(0xCD); ST7701_DATA(0x08);
 
-    st7701_lcd_cmd(0xB0); /* Positive Gamma */
-    st7701_lcd_data(0x00); st7701_lcd_data(0x11); st7701_lcd_data(0x18); st7701_lcd_data(0x0E); st7701_lcd_data(0x11); st7701_lcd_data(0x06);
-    st7701_lcd_data(0x07); st7701_lcd_data(0x08); st7701_lcd_data(0x07); st7701_lcd_data(0x22); st7701_lcd_data(0x04); st7701_lcd_data(0x12);
-    st7701_lcd_data(0x0F); st7701_lcd_data(0xAA); st7701_lcd_data(0x31); st7701_lcd_data(0x18);
+    ST7701_CMD(0xB0); /* Positive Gamma */
+    ST7701_DATA(0x00); ST7701_DATA(0x11); ST7701_DATA(0x18); ST7701_DATA(0x0E); ST7701_DATA(0x11); ST7701_DATA(0x06);
+    ST7701_DATA(0x07); ST7701_DATA(0x08); ST7701_DATA(0x07); ST7701_DATA(0x22); ST7701_DATA(0x04); ST7701_DATA(0x12);
+    ST7701_DATA(0x0F); ST7701_DATA(0xAA); ST7701_DATA(0x31); ST7701_DATA(0x18);
 
-    st7701_lcd_cmd(0xB1); /* Negative Gamma */
-    st7701_lcd_data(0x00); st7701_lcd_data(0x11); st7701_lcd_data(0x19); st7701_lcd_data(0x0E); st7701_lcd_data(0x12); st7701_lcd_data(0x07);
-    st7701_lcd_data(0x08); st7701_lcd_data(0x08); st7701_lcd_data(0x08); st7701_lcd_data(0x22); st7701_lcd_data(0x04); st7701_lcd_data(0x11);
-    st7701_lcd_data(0x11); st7701_lcd_data(0xA9); st7701_lcd_data(0x32); st7701_lcd_data(0x18);
+    ST7701_CMD(0xB1); /* Negative Gamma */
+    ST7701_DATA(0x00); ST7701_DATA(0x11); ST7701_DATA(0x19); ST7701_DATA(0x0E); ST7701_DATA(0x12); ST7701_DATA(0x07);
+    ST7701_DATA(0x08); ST7701_DATA(0x08); ST7701_DATA(0x08); ST7701_DATA(0x22); ST7701_DATA(0x04); ST7701_DATA(0x11);
+    ST7701_DATA(0x11); ST7701_DATA(0xA9); ST7701_DATA(0x32); ST7701_DATA(0x18);
 
     /* Command2 BK1 */
-    st7701_lcd_cmd(0xFF); st7701_lcd_data(0x77); st7701_lcd_data(0x01); st7701_lcd_data(0x00); st7701_lcd_data(0x00); st7701_lcd_data(0x11);
+    ST7701_CMD(0xFF); ST7701_DATA(0x77); ST7701_DATA(0x01); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x11);
 
-    st7701_lcd_cmd(0xB0); st7701_lcd_data(0x60);
-    st7701_lcd_cmd(0xB1); st7701_lcd_data(0x32);
-    st7701_lcd_cmd(0xB2); st7701_lcd_data(0x07);
-    st7701_lcd_cmd(0xB3); st7701_lcd_data(0x80);
-    st7701_lcd_cmd(0xB5); st7701_lcd_data(0x49);
-    st7701_lcd_cmd(0xB7); st7701_lcd_data(0x85);
-    st7701_lcd_cmd(0xB8); st7701_lcd_data(0x21);
-    st7701_lcd_cmd(0xC1); st7701_lcd_data(0x78);
-    st7701_lcd_cmd(0xC2); st7701_lcd_data(0x78);
+    ST7701_CMD(0xB0); ST7701_DATA(0x60);
+    ST7701_CMD(0xB1); ST7701_DATA(0x32);
+    ST7701_CMD(0xB2); ST7701_DATA(0x07);
+    ST7701_CMD(0xB3); ST7701_DATA(0x80);
+    ST7701_CMD(0xB5); ST7701_DATA(0x49);
+    ST7701_CMD(0xB7); ST7701_DATA(0x85);
+    ST7701_CMD(0xB8); ST7701_DATA(0x21);
+    ST7701_CMD(0xC1); ST7701_DATA(0x78);
+    ST7701_CMD(0xC2); ST7701_DATA(0x78);
 
     vTaskDelay(pdMS_TO_TICKS(20));
 
-    st7701_lcd_cmd(0xE0); st7701_lcd_data(0x00); st7701_lcd_data(0x1B); st7701_lcd_data(0x02);
+    ST7701_CMD(0xE0); ST7701_DATA(0x00); ST7701_DATA(0x1B); ST7701_DATA(0x02);
 
-    st7701_lcd_cmd(0xE1);
-    st7701_lcd_data(0x08); st7701_lcd_data(0xA0); st7701_lcd_data(0x00); st7701_lcd_data(0x00); st7701_lcd_data(0x07); st7701_lcd_data(0xA0);
-    st7701_lcd_data(0x00); st7701_lcd_data(0x00); st7701_lcd_data(0x00); st7701_lcd_data(0x44); st7701_lcd_data(0x44);
+    ST7701_CMD(0xE1);
+    ST7701_DATA(0x08); ST7701_DATA(0xA0); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x07); ST7701_DATA(0xA0);
+    ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x44); ST7701_DATA(0x44);
 
-    st7701_lcd_cmd(0xE2);
-    st7701_lcd_data(0x11); st7701_lcd_data(0x11); st7701_lcd_data(0x44); st7701_lcd_data(0x44); st7701_lcd_data(0xED); st7701_lcd_data(0xA0);
-    st7701_lcd_data(0x00); st7701_lcd_data(0x00); st7701_lcd_data(0xEC); st7701_lcd_data(0xA0); st7701_lcd_data(0x00); st7701_lcd_data(0x00);
+    ST7701_CMD(0xE2);
+    ST7701_DATA(0x11); ST7701_DATA(0x11); ST7701_DATA(0x44); ST7701_DATA(0x44); ST7701_DATA(0xED); ST7701_DATA(0xA0);
+    ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0xEC); ST7701_DATA(0xA0); ST7701_DATA(0x00); ST7701_DATA(0x00);
 
-    st7701_lcd_cmd(0xE3); st7701_lcd_data(0x00); st7701_lcd_data(0x00); st7701_lcd_data(0x11); st7701_lcd_data(0x11);
-    st7701_lcd_cmd(0xE4); st7701_lcd_data(0x44); st7701_lcd_data(0x44);
+    ST7701_CMD(0xE3); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x11); ST7701_DATA(0x11);
+    ST7701_CMD(0xE4); ST7701_DATA(0x44); ST7701_DATA(0x44);
 
-    st7701_lcd_cmd(0xE5);
-    st7701_lcd_data(0x0A); st7701_lcd_data(0xE9); st7701_lcd_data(0xD8); st7701_lcd_data(0xA0); st7701_lcd_data(0x0C); st7701_lcd_data(0xEB);
-    st7701_lcd_data(0xD8); st7701_lcd_data(0xA0); st7701_lcd_data(0x0E); st7701_lcd_data(0xED); st7701_lcd_data(0xD8); st7701_lcd_data(0xA0);
-    st7701_lcd_data(0x10); st7701_lcd_data(0xEF); st7701_lcd_data(0xD8); st7701_lcd_data(0xA0);
+    ST7701_CMD(0xE5);
+    ST7701_DATA(0x0A); ST7701_DATA(0xE9); ST7701_DATA(0xD8); ST7701_DATA(0xA0); ST7701_DATA(0x0C); ST7701_DATA(0xEB);
+    ST7701_DATA(0xD8); ST7701_DATA(0xA0); ST7701_DATA(0x0E); ST7701_DATA(0xED); ST7701_DATA(0xD8); ST7701_DATA(0xA0);
+    ST7701_DATA(0x10); ST7701_DATA(0xEF); ST7701_DATA(0xD8); ST7701_DATA(0xA0);
 
-    st7701_lcd_cmd(0xE6); st7701_lcd_data(0x00); st7701_lcd_data(0x00); st7701_lcd_data(0x11); st7701_lcd_data(0x11);
-    st7701_lcd_cmd(0xE7); st7701_lcd_data(0x44); st7701_lcd_data(0x44);
+    ST7701_CMD(0xE6); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x11); ST7701_DATA(0x11);
+    ST7701_CMD(0xE7); ST7701_DATA(0x44); ST7701_DATA(0x44);
 
-    st7701_lcd_cmd(0xE8);
-    st7701_lcd_data(0x09); st7701_lcd_data(0xE8); st7701_lcd_data(0xD8); st7701_lcd_data(0xA0); st7701_lcd_data(0x0B); st7701_lcd_data(0xEA);
-    st7701_lcd_data(0xD8); st7701_lcd_data(0xA0); st7701_lcd_data(0x0D); st7701_lcd_data(0xEC); st7701_lcd_data(0xD8); st7701_lcd_data(0xA0);
-    st7701_lcd_data(0x0F); st7701_lcd_data(0xEE); st7701_lcd_data(0xD8); st7701_lcd_data(0xA0);
+    ST7701_CMD(0xE8);
+    ST7701_DATA(0x09); ST7701_DATA(0xE8); ST7701_DATA(0xD8); ST7701_DATA(0xA0); ST7701_DATA(0x0B); ST7701_DATA(0xEA);
+    ST7701_DATA(0xD8); ST7701_DATA(0xA0); ST7701_DATA(0x0D); ST7701_DATA(0xEC); ST7701_DATA(0xD8); ST7701_DATA(0xA0);
+    ST7701_DATA(0x0F); ST7701_DATA(0xEE); ST7701_DATA(0xD8); ST7701_DATA(0xA0);
 
-    st7701_lcd_cmd(0xEB);
-    st7701_lcd_data(0x02); st7701_lcd_data(0x00); st7701_lcd_data(0xE4); st7701_lcd_data(0xE4); st7701_lcd_data(0x88); st7701_lcd_data(0x00);
-    st7701_lcd_data(0x40);
+    ST7701_CMD(0xEB);
+    ST7701_DATA(0x02); ST7701_DATA(0x00); ST7701_DATA(0xE4); ST7701_DATA(0xE4); ST7701_DATA(0x88); ST7701_DATA(0x00);
+    ST7701_DATA(0x40);
 
-    st7701_lcd_cmd(0xEC); st7701_lcd_data(0x3C); st7701_lcd_data(0x00);
+    ST7701_CMD(0xEC); ST7701_DATA(0x3C); ST7701_DATA(0x00);
 
-    st7701_lcd_cmd(0xED);
-    st7701_lcd_data(0xAB); st7701_lcd_data(0x89); st7701_lcd_data(0x76); st7701_lcd_data(0x54); st7701_lcd_data(0x02); st7701_lcd_data(0xFF);
-    st7701_lcd_data(0xFF); st7701_lcd_data(0xFF); st7701_lcd_data(0xFF); st7701_lcd_data(0xFF); st7701_lcd_data(0xFF); st7701_lcd_data(0x20);
-    st7701_lcd_data(0x45); st7701_lcd_data(0x67); st7701_lcd_data(0x98); st7701_lcd_data(0xBA);
+    ST7701_CMD(0xED);
+    ST7701_DATA(0xAB); ST7701_DATA(0x89); ST7701_DATA(0x76); ST7701_DATA(0x54); ST7701_DATA(0x02); ST7701_DATA(0xFF);
+    ST7701_DATA(0xFF); ST7701_DATA(0xFF); ST7701_DATA(0xFF); ST7701_DATA(0xFF); ST7701_DATA(0xFF); ST7701_DATA(0x20);
+    ST7701_DATA(0x45); ST7701_DATA(0x67); ST7701_DATA(0x98); ST7701_DATA(0xBA);
 
     /* Exit Command2 */
-    st7701_lcd_cmd(0xFF); st7701_lcd_data(0x77); st7701_lcd_data(0x01); st7701_lcd_data(0x00); st7701_lcd_data(0x00); st7701_lcd_data(0x00);
+    ST7701_CMD(0xFF); ST7701_DATA(0x77); ST7701_DATA(0x01); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x00);
 
-    st7701_lcd_cmd(0x11); /* Sleep Out */
+    ST7701_CMD(0x11); /* Sleep Out */
     vTaskDelay(pdMS_TO_TICKS(120));
 
-    st7701_lcd_cmd(0x29); /* Display On */
+    ST7701_CMD(0x29); /* Display On */
     vTaskDelay(pdMS_TO_TICKS(20));
 
+    ESP_LOGI(TAG, "ST7701S pre-init completed");
     return ESP_OK;
 }
 
@@ -543,6 +619,7 @@ esp_err_t solar_os_st7701_attach(const char *name,
         free(dev);
         return err;
     }
+    ESP_LOGI(TAG, "LCD reset succeeded");
 
     rgb_st7701_config_t cfg = {
         .hsync_gpio = hsync, .vsync_gpio = vsync, .de_gpio = de, .pclk_gpio = pclk,
@@ -572,6 +649,35 @@ esp_err_t solar_os_st7701_attach(const char *name,
         free(dev);
         return err;
     }
+
+#if SOLAR_OS_D1L_ST7701_TEST_FRAME
+    /* HARDWARE-BRINGUP DIAGNOSTIC, added 2026-09-17 (code-review item 7):
+     * push one solid-color RGB565 frame straight to the panel here, before
+     * any SolarOS/u8g2 rendering exists, to separate "panel/backlight/
+     * RGB-timing problem" from "SolarOS rendering-path problem". If this
+     * solid frame is visible, the panel/timing/backlight chain is good and
+     * any remaining blank-screen symptom is in u8g2/solar_os_gfx instead.
+     * If it's still not visible, the problem is at or below this point
+     * (panel init, RGB timings, or backlight). Disable by leaving
+     * SOLAR_OS_D1L_ST7701_TEST_FRAME at its default of 0 once resolved. */
+    {
+        size_t px_count = (size_t)cfg.width * cfg.height;
+        uint16_t *test_fb = heap_caps_malloc(px_count * sizeof(uint16_t),
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (test_fb != NULL) {
+            for (size_t i = 0; i < px_count; i++) {
+                test_fb[i] = 0xF800; /* solid red, RGB565 */
+            }
+            esp_err_t test_err = rgb_st7701_present(dev->panel, test_fb);
+            ESP_LOGI(TAG, "test frame push: %s",
+                     test_err == ESP_OK ? "OK" : esp_err_to_name(test_err));
+            free(test_fb);
+        } else {
+            ESP_LOGE(TAG, "test frame: failed to allocate %u-pixel buffer",
+                     (unsigned)px_count);
+        }
+    }
+#endif
 
     dev->tile_width = (uint16_t)((cfg.width + 7U) / 8U);
     dev->tile_height = (uint16_t)((cfg.height + 7U) / 8U);

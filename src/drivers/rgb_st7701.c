@@ -176,9 +176,48 @@ esp_err_t rgb_st7701_init(const rgb_st7701_config_t *config, rgb_st7701_t **out_
         free(dev);
         return err;
     }
+    ESP_LOGI(TAG, "esp_lcd_new_rgb_panel() succeeded");
 
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(dev->panel), TAG, "panel_reset");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(dev->panel), TAG, "panel_init");
+    /* FIXED 2026-09-17 (code-review item 6): esp_lcd_panel_reset()/_init()
+     * used to run through ESP_RETURN_ON_ERROR(), which returns immediately
+     * on failure WITHOUT deleting the just-created panel handle or freeing
+     * `dev` — a real leak on any retry/re-attach path after a failed init.
+     * Now handled explicitly so every failure path cleans up. */
+    err = esp_lcd_panel_reset(dev->panel);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "panel_reset failed: %s", esp_err_to_name(err));
+        esp_lcd_panel_del(dev->panel);
+        free(dev);
+        return err;
+    }
+
+    err = esp_lcd_panel_init(dev->panel);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "panel_init failed: %s", esp_err_to_name(err));
+        esp_lcd_panel_del(dev->panel);
+        free(dev);
+        return err;
+    }
+    ESP_LOGI(TAG, "panel initialization succeeded");
+
+    /* FIXED 2026-09-17 (code-review item 1, HIGH): the LEDC channel used
+     * to be configured with .duty = 0 and nothing afterward ever reliably
+     * turned it on — the only intended path was u8g2 issuing
+     * U8X8_MSG_DISPLAY_SET_POWER_SAVE, which never fires if u8g2 believes
+     * power-save is already disabled. That meant the panel could be fully
+     * initialized and scanning out real pixel data while the backlight
+     * stayed dark the entire time, indistinguishable from a real
+     * init failure. Force the backlight on here, right after a
+     * successful panel_init(), so backlight state no longer depends on
+     * u8g2's internal assumptions at all. */
+    err = rgb_st7701_set_backlight(dev, 100);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "backlight enable failed: %s", esp_err_to_name(err));
+        esp_lcd_panel_del(dev->panel);
+        free(dev);
+        return err;
+    }
+    ESP_LOGI(TAG, "backlight was set to 100%%");
 
     *out_dev = dev;
     return ESP_OK;
