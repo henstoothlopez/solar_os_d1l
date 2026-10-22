@@ -39,7 +39,7 @@ static const char *TAG = "solar_os_st7701";
  * RGB-timing problem" from "SolarOS rendering-path problem" during
  * hardware bring-up. Turn back off once a real image is confirmed. */
 #ifndef SOLAR_OS_D1L_ST7701_TEST_FRAME
-#define SOLAR_OS_D1L_ST7701_TEST_FRAME 1
+#define SOLAR_OS_D1L_ST7701_TEST_FRAME 0
 #endif
 
 typedef struct {
@@ -356,9 +356,9 @@ static void tile_to_rgb565(const uint8_t *tile_bits, uint16_t fg, uint16_t bg,
                            uint16_t *out /* 64 pixels, 8x8 */)
 {
     for (int row = 0; row < 8; row++) {
-        uint8_t bits = tile_bits[row];
+        /* FIXED 2026-10-21: u8g2 tiles are 8 COLUMN bytes, bit0 = top pixel. */
         for (int col = 0; col < 8; col++) {
-            out[row * 8 + col] = (bits & (1u << col)) ? fg : bg;
+            out[row * 8 + col] = (tile_bits[col] & (1u << row)) ? fg : bg;
         }
     }
 }
@@ -391,6 +391,15 @@ static uint8_t st7701_u8x8_display_cb(u8x8_t *u8x8, uint8_t message,
         const u8x8_tile_t *tile = (const u8x8_tile_t *)arg_ptr;
         if (tile == NULL || tile->tile_ptr == NULL) {
             return 0;
+        }
+        {
+            static bool tile_logged;
+            if (!tile_logged) {
+                tile_logged = true;
+                ESP_LOGI("solar_os_st7701", "DIAG first DRAW_TILE x=%u y=%u cnt=%u",
+                         (unsigned)tile->x_pos, (unsigned)tile->y_pos,
+                         (unsigned)tile->cnt);
+            }
         }
         uint16_t rect[64];
         for (uint8_t col = 0; col < tile->cnt; col++) {
@@ -472,6 +481,9 @@ static esp_err_t op_set_colors(solar_os_board_display_t *display,
     dev->bg_rgb565 = (uint16_t)(((background_rgb888 >> 8) & 0xF800) |
                                 ((background_rgb888 >> 5) & 0x07E0) |
                                 ((background_rgb888 >> 3) & 0x001F));
+    ESP_LOGI("solar_os_st7701", "DIAG set_colors fg888=%06X bg888=%06X -> fg565=%04X bg565=%04X",
+             (unsigned)foreground_rgb888, (unsigned)background_rgb888,
+             (unsigned)dev->fg_rgb565, (unsigned)dev->bg_rgb565);
     return ESP_OK;
 }
 
@@ -493,6 +505,15 @@ static esp_err_t op_present_surface(solar_os_board_display_t *display,
         return ESP_ERR_INVALID_ARG;
     }
     st7701_device_t *dev = device;
+        {
+        static bool surface_logged;
+        if (!surface_logged) {
+            surface_logged = true;
+            ESP_LOGI("solar_os_st7701", "DIAG first present_surface %ux%u rot=%d",
+                     (unsigned)surface->native_width,
+                     (unsigned)surface->native_height, (int)surface->rotation);
+        }
+    }
     const size_t pixel_count = (size_t)surface->native_width * surface->native_height;
     if (dev->rect_scratch_pixels < pixel_count) {
         return ESP_ERR_NO_MEM; /* scratch buffer sized at attach time to the
@@ -709,13 +730,18 @@ esp_err_t solar_os_st7701_attach(const char *name,
                      u8g2_ll_hvline_vertical_top_lsb, U8G2_R0);
     u8g2_InitDisplay(&dev->u8g2);
     u8g2_SetPowerSave(&dev->u8g2, 0);
+    ESP_LOGI("solar_os_st7701", "DIAG u8g2 size=%ux%u buf=%p board=%ux%u",
+             (unsigned)u8g2_GetDisplayWidth(&dev->u8g2),
+             (unsigned)u8g2_GetDisplayHeight(&dev->u8g2),
+             (void *)u8g2_GetBufferPtr(&dev->u8g2),
+             (unsigned)cfg.width, (unsigned)cfg.height);
 
     dev->display = (solar_os_board_display_t){
         .ops = &st7701_ops, .driver = dev->panel, .driver_name = "st7701_rgb",
         .u8g2 = &dev->u8g2, .controller = "ST7701S",
         .width = cfg.width, .height = cfg.height,
         .surface_formats = SOLAR_OS_DISPLAY_FORMAT_INDEX8_BIT,
-        .frame_formats = SOLAR_OS_DISPLAY_FORMAT_INDEX2_BIT,
+        .frame_formats = 0, /* TEMP 2026-10-21: INDEX2 frame path off; registration needs preferred_stream_fps != 0 when frame formats are set */
         .ready = true,
     };
     err = solar_os_board_display_register_primary(&dev->display);

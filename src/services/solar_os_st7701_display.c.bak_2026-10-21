@@ -1,0 +1,775 @@
+#include "solar_os_st7701_display.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "d1l_expander.h"
+#include "driver/gpio.h"
+#include "esp_check.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h" /* added 2026-09-17 for the boot-log checkpoints and
+                         error-propagation logging below */
+#include "esp_rom_sys.h" /* esp_rom_delay_us() — added 2026-09-16 for the
+                             ST7701S bit-bang timing-margin fix, see
+                             st7701_spi_write_9bit() below */
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "rgb_st7701.h"
+#include "solar_os_board.h"
+#include "solar_os_board_display.h"
+#include "solar_os_display.h"
+#include "solar_os_pins.h"
+#include "u8g2.h"
+#include "u8x8.h"
+
+/* TCA9535 pins — must match the board manifest's [defines] section
+ * (SOLAR_OS_BOARD_TCA9535_PIN_LCD_CS / _LCD_RST). Hardcoded here rather
+ * than read from a macro since this file is D1L-only glue, same
+ * reasoning as d1l_expander.c's own bus-name constant. */
+#define D1L_LCD_CS_PIN 4
+#define D1L_LCD_RST_PIN 5
+#define D1L_LCD_RESET_PULSE_US 10000 /* 10ms — matches Launcher port timing */
+
+static const char *TAG = "solar_os_st7701";
+
+/* Set this to 1 (or pass -DSOLAR_OS_D1L_ST7701_TEST_FRAME=1 as a build
+ * flag) to push one solid-color RGB565 frame straight to the panel right
+ * after panel init, bypassing all SolarOS/u8g2 rendering entirely. Added
+ * 2026-09-17 per code-review item 7: this separates "panel/backlight/
+ * RGB-timing problem" from "SolarOS rendering-path problem" during
+ * hardware bring-up. Turn back off once a real image is confirmed. */
+#ifndef SOLAR_OS_D1L_ST7701_TEST_FRAME
+#define SOLAR_OS_D1L_ST7701_TEST_FRAME 0
+#endif
+
+typedef struct {
+    bool active;
+    char name[SOLAR_OS_EXPANSION_DEVICE_NAME_MAX];
+    rgb_st7701_t *panel;
+    solar_os_board_display_t display;
+    u8g2_t u8g2;
+    u8x8_display_info_t display_info;
+    uint8_t *tile_buffer;       /* u8g2's own monochrome tile buffer */
+    size_t tile_buffer_size;
+    uint16_t tile_width;        /* in 8px tiles */
+    uint16_t tile_height;
+    uint16_t fg_rgb565;
+    uint16_t bg_rgb565;
+    uint16_t *rect_scratch;     /* reused RGB565 conversion buffer, PSRAM */
+    size_t rect_scratch_pixels;
+} st7701_device_t;
+
+static st7701_device_t *device;
+static st7701_device_t *active_display; /* needed by the u8x8 display_cb,
+    which u8g2 calls without a way to pass our own context pointer through —
+    same pattern tft_ili9341.c uses for the same reason. */
+
+/* ---------------------------------------------------------------------
+ * Binding parsing — mirrors solar_os_tft_display.c's parse_bindings()
+ * exactly in style. Data pins (R0-4/G0-5/B0-4) are NOT bindings — they
+ * come from SOLAR_OS_BOARD_PIN_LCD_* board-level defines (see the
+ * manifest and SolarOS-D1L-Port-Roadmap.md section 3's note on why the
+ * binding schema doesn't have a clean way to express an 18-pin parallel
+ * bus).
+ * --------------------------------------------------------------------- */
+static bool role_is(const solar_os_expansion_binding_t *binding, const char *role)
+{
+    return binding != NULL && strcmp(binding->role, role) == 0;
+}
+
+static esp_err_t parse_bindings(const solar_os_expansion_binding_t *bindings,
+                                size_t count, int *hsync, int *vsync, int *de,
+                                int *pclk, int *bl, bool *bl_active_high,
+                                bool *bl_pwm)
+{
+    bool have_hsync = false, have_vsync = false, have_de = false, have_pclk = false;
+    *hsync = *vsync = *de = *pclk = *bl = -1;
+    *bl_active_high = true;
+    *bl_pwm = false;
+
+    for (size_t i = 0; i < count; i++) {
+        const solar_os_expansion_binding_t *b = &bindings[i];
+        if (b->kind == SOLAR_OS_EXPANSION_BINDING_GPIO && role_is(b, "hsync")) {
+            *hsync = b->value; have_hsync = true;
+        } else if (b->kind == SOLAR_OS_EXPANSION_BINDING_GPIO && role_is(b, "vsync")) {
+            *vsync = b->value; have_vsync = true;
+        } else if (b->kind == SOLAR_OS_EXPANSION_BINDING_GPIO && role_is(b, "de")) {
+            *de = b->value; have_de = true;
+        } else if (b->kind == SOLAR_OS_EXPANSION_BINDING_GPIO && role_is(b, "pclk")) {
+            *pclk = b->value; have_pclk = true;
+        } else if (b->kind == SOLAR_OS_EXPANSION_BINDING_GPIO && role_is(b, "bl")) {
+            *bl = b->value;
+        } else if (b->kind == SOLAR_OS_EXPANSION_BINDING_PARAMETER && role_is(b, "active")) {
+            *bl_active_high = b->value != 0;
+        } else if (b->kind == SOLAR_OS_EXPANSION_BINDING_PARAMETER && role_is(b, "pwm")) {
+            *bl_pwm = b->value != 0;
+        } else {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    return have_hsync && have_vsync && have_de && have_pclk ? ESP_OK : ESP_ERR_INVALID_ARG;
+}
+
+/* ---------------------------------------------------------------------
+ * ST7701S pre-init sequence — STILL A STUB. See header/roadmap: needs
+ * the real byte sequence from D1L_ST7701_Init.cpp, not fabricated here.
+ * --------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------
+ * ST7701S pre-init sequence — PORTED 2026-09-03 from the real, hardware-
+ * verified D1L_ST7701_Init.cpp (Launcher port, TEST_LCD_004-007 all
+ * passed on real D1L hardware). Every command/data BYTE below is copied
+ * unchanged from that file — do not "clean up" or reorder any of it,
+ * the panel's own command interpreter cares about exact sequence and
+ * byte values. What DID change, necessarily, going from Arduino to
+ * ESP-IDF:
+ *
+ *   - digitalWrite()/pinMode() -> gpio_set_level()/gpio_config()
+ *   - the original's CS pin used a generic function-pointer callback
+ *     (exp_write_pin_fn) into Launcher's own expander code; here it's
+ *     d1l_expander_write_fast() directly, since this file already owns
+ *     that dependency
+ *   - delay(ms) -> vTaskDelay(pdMS_TO_TICKS(ms))
+ *
+ * REAL, UNVERIFIED RISK, not present in the original: Arduino's
+ * digitalWrite() has meaningful call overhead (~100ns-1us range on
+ * classic Arduino cores, less but still nonzero on ESP32 Arduino) that
+ * incidentally acts as setup/hold time for this bit-banged 9-bit SPI
+ * protocol. ESP-IDF's gpio_set_level() is a much more direct register
+ * write with less overhead. If the panel doesn't respond (blank screen,
+ * or garbage/scrambled colors after Section 3's other TUNE ON HARDWARE
+ * items are resolved), inserting a small delay (start with
+ * esp_rom_delay_us(1)) between each digitalWrite-equivalent call below
+ * is the first thing to try — not a wiring or byte-sequence problem.
+ *
+ * CS handling: the original toggles CS (via the expander) around EVERY
+ * command/data byte, not once for the whole sequence — ported exactly
+ * as such. This means ~300+ expander I2C transactions for this sequence
+ * alone (roughly 150 lcd_cmd/lcd_data calls x 2 CS edges each) — expect
+ * this init sequence to take a noticeably long time (likely low hundreds
+ * of milliseconds to low seconds depdepending on I2C bus speed), not a
+ * bug, just a real cost of bit-banging LCD init through an I2C-connected
+ * expander. d1l_expander_write() is called ONCE up front to configure
+ * the CS pin as output; every toggle after that uses
+ * d1l_expander_write_fast() to skip re-configuring pin direction on
+ * every single call (see d1l_expander.h's 2026-09-03 addition).
+ * --------------------------------------------------------------------- */
+#define D1L_ST7701_SCK_PIN 41   /* = LORA_SCLK, shared/reused per the real
+                                    platformio.ini's own comment */
+#define D1L_ST7701_MOSI_PIN 48  /* = LORA_MOSI */
+
+/* TIMING-MARGIN FIX, added 2026-09-16 (see 09-14/09-16 handoff docs):
+ * every gpio_set_level() call below is followed by esp_rom_delay_us(1).
+ * Arduino's digitalWrite() had enough call overhead to incidentally act
+ * as setup/hold time for this bit-banged 9-bit protocol; ESP-IDF's
+ * gpio_set_level() is a much more direct register write and may not
+ * leave the panel enough time to latch each bit. This is the #1
+ * candidate fix for the black-screen/no-backlight symptom per the
+ * 09-14 handoff's own "TUNE ON HARDWARE" note in this exact function.
+ * If the panel comes up correctly after this change, these delays can
+ * later be trimmed/removed one at a time to find the real minimum
+ * margin needed -- leave them in for now while confirming this is
+ * actually the fix. */
+static inline void st7701_spi_write_9bit(uint8_t dc, uint8_t data)
+{
+    gpio_set_level(D1L_ST7701_SCK_PIN, 0);
+    esp_rom_delay_us(1);
+    gpio_set_level(D1L_ST7701_MOSI_PIN, dc ? 1 : 0);
+    esp_rom_delay_us(1);
+    gpio_set_level(D1L_ST7701_SCK_PIN, 1);
+    esp_rom_delay_us(1);
+    for (int i = 7; i >= 0; i--) {
+        gpio_set_level(D1L_ST7701_SCK_PIN, 0);
+        esp_rom_delay_us(1);
+        gpio_set_level(D1L_ST7701_MOSI_PIN, (data >> i) & 1 ? 1 : 0);
+        esp_rom_delay_us(1);
+        gpio_set_level(D1L_ST7701_SCK_PIN, 1);
+        esp_rom_delay_us(1);
+    }
+}
+
+/* FIXED 2026-09-17 (code-review item 2, HIGH): these used to be void and
+ * silently discarded the TCA9535 CS-write results. That meant a wrong
+ * expander address, an uninitialized I2C bus, or any single failed write
+ * would let run_preinit_sequence() run to completion and return ESP_OK
+ * regardless — making a real hardware init failure look identical to "the
+ * display is blank for some other reason". Now both propagate the real
+ * esp_err_t so a bad transaction anywhere in the ~300-toggle sequence
+ * stops the sequence immediately instead of being silently ignored. */
+static esp_err_t st7701_lcd_cmd(uint8_t cmd)
+{
+    esp_err_t err = d1l_expander_write_fast(D1L_LCD_CS_PIN, false);
+    if (err != ESP_OK) {
+        return err;
+    }
+    st7701_spi_write_9bit(0, cmd);
+    return d1l_expander_write_fast(D1L_LCD_CS_PIN, true);
+}
+
+static esp_err_t st7701_lcd_data(uint8_t data)
+{
+    esp_err_t err = d1l_expander_write_fast(D1L_LCD_CS_PIN, false);
+    if (err != ESP_OK) {
+        return err;
+    }
+    st7701_spi_write_9bit(1, data);
+    return d1l_expander_write_fast(D1L_LCD_CS_PIN, true);
+}
+
+/* Wrap every command/data byte in the sequence below with these so a
+ * failure at any single byte logs exactly which command/byte failed and
+ * aborts the sequence immediately, instead of continuing on regardless
+ * (see the fix note on st7701_lcd_cmd()/st7701_lcd_data() above). Requires
+ * a local `esp_err_t err;` in scope, which run_preinit_sequence() already
+ * declares. */
+#define ST7701_CMD(c) do { \
+        err = st7701_lcd_cmd(c); \
+        if (err != ESP_OK) { \
+            ESP_LOGE(TAG, "ST7701S pre-init: cmd 0x%02X failed at %s:%d: %s", \
+                     (unsigned)(c), __FILE__, __LINE__, esp_err_to_name(err)); \
+            return err; \
+        } \
+    } while (0)
+#define ST7701_DATA(d) do { \
+        err = st7701_lcd_data(d); \
+        if (err != ESP_OK) { \
+            ESP_LOGE(TAG, "ST7701S pre-init: data 0x%02X failed at %s:%d: %s", \
+                     (unsigned)(d), __FILE__, __LINE__, esp_err_to_name(err)); \
+            return err; \
+        } \
+    } while (0)
+
+static esp_err_t run_preinit_sequence(void)
+{
+    const gpio_config_t spi_pins = {
+        .pin_bit_mask = (1ULL << D1L_ST7701_SCK_PIN) | (1ULL << D1L_ST7701_MOSI_PIN),
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    esp_err_t err = gpio_config(&spi_pins);
+    if (err != ESP_OK) {
+        return err;
+    }
+    /* Configure CS as output once — every call after this uses the fast
+     * (no mode-reconfigure) path, see the block comment above. */
+    err = d1l_expander_write(D1L_LCD_CS_PIN, true);
+    if (err != ESP_OK) {
+        return err;
+    }
+    ESP_LOGI(TAG, "TCA9535 write for LCD_CS succeeded (expander is responding)");
+
+    gpio_set_level(D1L_ST7701_SCK_PIN, 1);
+    esp_rom_delay_us(1);
+    gpio_set_level(D1L_ST7701_MOSI_PIN, 0);
+    esp_rom_delay_us(1);
+
+    /* Command2 BK0 */
+    ST7701_CMD(0xFF); ST7701_DATA(0x77); ST7701_DATA(0x01); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x10);
+
+    ST7701_CMD(0xC0); ST7701_DATA(0x3B); ST7701_DATA(0x00);
+    ST7701_CMD(0xC1); ST7701_DATA(0x0D); ST7701_DATA(0x02);
+    ST7701_CMD(0xC2); ST7701_DATA(0x31); ST7701_DATA(0x05);
+    ST7701_CMD(0xCD); ST7701_DATA(0x08);
+
+    ST7701_CMD(0xB0); /* Positive Gamma */
+    ST7701_DATA(0x00); ST7701_DATA(0x11); ST7701_DATA(0x18); ST7701_DATA(0x0E); ST7701_DATA(0x11); ST7701_DATA(0x06);
+    ST7701_DATA(0x07); ST7701_DATA(0x08); ST7701_DATA(0x07); ST7701_DATA(0x22); ST7701_DATA(0x04); ST7701_DATA(0x12);
+    ST7701_DATA(0x0F); ST7701_DATA(0xAA); ST7701_DATA(0x31); ST7701_DATA(0x18);
+
+    ST7701_CMD(0xB1); /* Negative Gamma */
+    ST7701_DATA(0x00); ST7701_DATA(0x11); ST7701_DATA(0x19); ST7701_DATA(0x0E); ST7701_DATA(0x12); ST7701_DATA(0x07);
+    ST7701_DATA(0x08); ST7701_DATA(0x08); ST7701_DATA(0x08); ST7701_DATA(0x22); ST7701_DATA(0x04); ST7701_DATA(0x11);
+    ST7701_DATA(0x11); ST7701_DATA(0xA9); ST7701_DATA(0x32); ST7701_DATA(0x18);
+
+    /* Command2 BK1 */
+    ST7701_CMD(0xFF); ST7701_DATA(0x77); ST7701_DATA(0x01); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x11);
+
+    ST7701_CMD(0xB0); ST7701_DATA(0x60);
+    ST7701_CMD(0xB1); ST7701_DATA(0x32);
+    ST7701_CMD(0xB2); ST7701_DATA(0x07);
+    ST7701_CMD(0xB3); ST7701_DATA(0x80);
+    ST7701_CMD(0xB5); ST7701_DATA(0x49);
+    ST7701_CMD(0xB7); ST7701_DATA(0x85);
+    ST7701_CMD(0xB8); ST7701_DATA(0x21);
+    ST7701_CMD(0xC1); ST7701_DATA(0x78);
+    ST7701_CMD(0xC2); ST7701_DATA(0x78);
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    ST7701_CMD(0xE0); ST7701_DATA(0x00); ST7701_DATA(0x1B); ST7701_DATA(0x02);
+
+    ST7701_CMD(0xE1);
+    ST7701_DATA(0x08); ST7701_DATA(0xA0); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x07); ST7701_DATA(0xA0);
+    ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x44); ST7701_DATA(0x44);
+
+    ST7701_CMD(0xE2);
+    ST7701_DATA(0x11); ST7701_DATA(0x11); ST7701_DATA(0x44); ST7701_DATA(0x44); ST7701_DATA(0xED); ST7701_DATA(0xA0);
+    ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0xEC); ST7701_DATA(0xA0); ST7701_DATA(0x00); ST7701_DATA(0x00);
+
+    ST7701_CMD(0xE3); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x11); ST7701_DATA(0x11);
+    ST7701_CMD(0xE4); ST7701_DATA(0x44); ST7701_DATA(0x44);
+
+    ST7701_CMD(0xE5);
+    ST7701_DATA(0x0A); ST7701_DATA(0xE9); ST7701_DATA(0xD8); ST7701_DATA(0xA0); ST7701_DATA(0x0C); ST7701_DATA(0xEB);
+    ST7701_DATA(0xD8); ST7701_DATA(0xA0); ST7701_DATA(0x0E); ST7701_DATA(0xED); ST7701_DATA(0xD8); ST7701_DATA(0xA0);
+    ST7701_DATA(0x10); ST7701_DATA(0xEF); ST7701_DATA(0xD8); ST7701_DATA(0xA0);
+
+    ST7701_CMD(0xE6); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x11); ST7701_DATA(0x11);
+    ST7701_CMD(0xE7); ST7701_DATA(0x44); ST7701_DATA(0x44);
+
+    ST7701_CMD(0xE8);
+    ST7701_DATA(0x09); ST7701_DATA(0xE8); ST7701_DATA(0xD8); ST7701_DATA(0xA0); ST7701_DATA(0x0B); ST7701_DATA(0xEA);
+    ST7701_DATA(0xD8); ST7701_DATA(0xA0); ST7701_DATA(0x0D); ST7701_DATA(0xEC); ST7701_DATA(0xD8); ST7701_DATA(0xA0);
+    ST7701_DATA(0x0F); ST7701_DATA(0xEE); ST7701_DATA(0xD8); ST7701_DATA(0xA0);
+
+    ST7701_CMD(0xEB);
+    ST7701_DATA(0x02); ST7701_DATA(0x00); ST7701_DATA(0xE4); ST7701_DATA(0xE4); ST7701_DATA(0x88); ST7701_DATA(0x00);
+    ST7701_DATA(0x40);
+
+    ST7701_CMD(0xEC); ST7701_DATA(0x3C); ST7701_DATA(0x00);
+
+    ST7701_CMD(0xED);
+    ST7701_DATA(0xAB); ST7701_DATA(0x89); ST7701_DATA(0x76); ST7701_DATA(0x54); ST7701_DATA(0x02); ST7701_DATA(0xFF);
+    ST7701_DATA(0xFF); ST7701_DATA(0xFF); ST7701_DATA(0xFF); ST7701_DATA(0xFF); ST7701_DATA(0xFF); ST7701_DATA(0x20);
+    ST7701_DATA(0x45); ST7701_DATA(0x67); ST7701_DATA(0x98); ST7701_DATA(0xBA);
+
+    /* Exit Command2 */
+    ST7701_CMD(0xFF); ST7701_DATA(0x77); ST7701_DATA(0x01); ST7701_DATA(0x00); ST7701_DATA(0x00); ST7701_DATA(0x00);
+
+    ST7701_CMD(0x11); /* Sleep Out */
+    vTaskDelay(pdMS_TO_TICKS(120));
+
+    ST7701_CMD(0x29); /* Display On */
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    ESP_LOGI(TAG, "ST7701S pre-init completed");
+    return ESP_OK;
+}
+
+/* ---------------------------------------------------------------------
+ * u8g2 "user-defined display" wiring — mirrors tft_ili9341.c's
+ * ili9341_u8x8_display_cb exactly in shape (SETUP_MEMORY / INIT /
+ * SET_POWER_SAVE / DRAW_TILE), adapted for a continuously-scanned
+ * framebuffer instead of an SPI push. byte_cb is u8x8_dummy_cb — unlike
+ * SPI panels, this display has no serial byte protocol for u8g2 to frame;
+ * DRAW_TILE writes pixels directly via rgb_st7701_present_rect.
+ * --------------------------------------------------------------------- */
+static void tile_to_rgb565(const uint8_t *tile_bits, uint16_t fg, uint16_t bg,
+                           uint16_t *out /* 64 pixels, 8x8 */)
+{
+    for (int row = 0; row < 8; row++) {
+        uint8_t bits = tile_bits[row];
+        for (int col = 0; col < 8; col++) {
+            out[row * 8 + col] = (bits & (1u << col)) ? fg : bg;
+        }
+    }
+}
+
+static uint8_t st7701_u8x8_display_cb(u8x8_t *u8x8, uint8_t message,
+                                      uint8_t arg_int, void *arg_ptr)
+{
+    if (message == U8X8_MSG_DISPLAY_SETUP_MEMORY) {
+        if (active_display == NULL) {
+            return 0;
+        }
+        u8x8_d_helper_display_setup_memory(u8x8, &active_display->display_info);
+        return 1;
+    }
+
+    st7701_device_t *dev = active_display;
+    if (dev == NULL) {
+        return 0;
+    }
+
+    switch (message) {
+    case U8X8_MSG_DISPLAY_INIT:
+        return 1; /* panel already brought up in attach_st7701() before
+                     u8g2_InitDisplay() is called */
+
+    case U8X8_MSG_DISPLAY_SET_POWER_SAVE:
+        return rgb_st7701_set_backlight(dev->panel, arg_int == 0 ? 100 : 0) == ESP_OK ? 1 : 0;
+
+    case U8X8_MSG_DISPLAY_DRAW_TILE: {
+        const u8x8_tile_t *tile = (const u8x8_tile_t *)arg_ptr;
+        if (tile == NULL || tile->tile_ptr == NULL) {
+            return 0;
+        }
+        uint16_t rect[64];
+        for (uint8_t col = 0; col < tile->cnt; col++) {
+            tile_to_rgb565(&tile->tile_ptr[col * 8], dev->fg_rgb565,
+                           dev->bg_rgb565, rect);
+            const uint16_t x = (uint16_t)((tile->x_pos + col) * 8);
+            const uint16_t y = (uint16_t)(tile->y_pos * 8);
+            if (rgb_st7701_present_rect(dev->panel, x, y, 8, 8, rect) != ESP_OK) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        return 0;
+    }
+}
+
+/* ---------------------------------------------------------------------
+ * Ops table — runtime_ready/resume/deinit/brightness are straightforward
+ * and low-risk. present_surface/present_frame are the newest, least-
+ * verified code in this file (see header).
+ * --------------------------------------------------------------------- */
+static esp_err_t op_runtime_ready(solar_os_board_display_t *display)
+{
+    return display != NULL && display->driver != NULL ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+static esp_err_t op_resume(solar_os_board_display_t *display)
+{
+    (void)display;
+    return ESP_OK; /* panel is continuously scanned once init'd; nothing
+                       extra needed to "resume" beyond backlight, handled
+                       via set_brightness separately */
+}
+
+static void op_deinit(solar_os_board_display_t *display)
+{
+    if (display != NULL && display->driver != NULL) {
+        rgb_st7701_deinit((rgb_st7701_t *)display->driver);
+        display->ready = false;
+    }
+}
+
+static bool op_brightness_supported(const solar_os_board_display_t *display)
+{
+    (void)display;
+    return true;
+}
+
+static esp_err_t op_get_brightness(const solar_os_board_display_t *display, uint8_t *percent)
+{
+    (void)display;
+    if (percent == NULL) return ESP_ERR_INVALID_ARG;
+    /* rgb_st7701.c doesn't currently track/report the last-set duty —
+     * small gap, not implemented. Returning a fixed value is wrong but
+     * harmless (no caller depends on read-back correctness yet). */
+    *percent = 100;
+    return ESP_OK;
+}
+
+static esp_err_t op_set_brightness(solar_os_board_display_t *display, uint8_t percent)
+{
+    return display != NULL && display->driver != NULL ?
+        rgb_st7701_set_backlight((rgb_st7701_t *)display->driver, percent) :
+        ESP_ERR_INVALID_STATE;
+}
+
+static esp_err_t op_set_colors(solar_os_board_display_t *display,
+                               uint32_t foreground_rgb888, uint32_t background_rgb888)
+{
+    if (display == NULL || display->driver == NULL) return ESP_ERR_INVALID_STATE;
+    st7701_device_t *dev = device; /* single static instance, see attach_st7701 */
+    (void)display;
+    dev->fg_rgb565 = (uint16_t)(((foreground_rgb888 >> 8) & 0xF800) |
+                                ((foreground_rgb888 >> 5) & 0x07E0) |
+                                ((foreground_rgb888 >> 3) & 0x001F));
+    dev->bg_rgb565 = (uint16_t)(((background_rgb888 >> 8) & 0xF800) |
+                                ((background_rgb888 >> 5) & 0x07E0) |
+                                ((background_rgb888 >> 3) & 0x001F));
+    return ESP_OK;
+}
+
+/* present_surface: INDEX8 only, matching real precedent (tft_ili9341.c's
+ * own present_surface also only supports INDEX8 — this isn't a corner
+ * cut, it's what the working reference driver does too). Deliberately
+ * SKIPS the tile-hash dirty-diffing optimization real SPI drivers need —
+ * this panel is continuously DMA-scanned from a framebuffer the LCD_CAM
+ * peripheral already owns, so there's no per-changed-pixel transfer cost
+ * to amortize the way there is over SPI. Every call redraws the surface's
+ * full native rectangle. Worth revisiting for perf once something is
+ * on screen, not before. */
+static esp_err_t op_present_surface(solar_os_board_display_t *display,
+                                    const solar_os_display_surface_t *surface)
+{
+    if (display == NULL || display->driver == NULL || surface == NULL ||
+        surface->format != SOLAR_OS_DISPLAY_FORMAT_INDEX8 ||
+        surface->data == NULL || surface->palette_rgb565 == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    st7701_device_t *dev = device;
+    const size_t pixel_count = (size_t)surface->native_width * surface->native_height;
+    if (dev->rect_scratch_pixels < pixel_count) {
+        return ESP_ERR_NO_MEM; /* scratch buffer sized at attach time to the
+                                   panel's full resolution — should never
+                                   actually trigger, guarded anyway */
+    }
+
+    bool quarter_turn = surface->rotation == SOLAR_OS_DISPLAY_ROTATION_90 ||
+                        surface->rotation == SOLAR_OS_DISPLAY_ROTATION_270;
+    for (uint16_t ny = 0; ny < surface->native_height; ny++) {
+        for (uint16_t nx = 0; nx < surface->native_width; nx++) {
+            uint16_t lx = nx, ly = ny;
+            switch (surface->rotation) {
+            case SOLAR_OS_DISPLAY_ROTATION_90:
+                lx = ny; ly = (uint16_t)(surface->native_width - 1U - nx); break;
+            case SOLAR_OS_DISPLAY_ROTATION_180:
+                lx = (uint16_t)(surface->native_width - 1U - nx);
+                ly = (uint16_t)(surface->native_height - 1U - ny); break;
+            case SOLAR_OS_DISPLAY_ROTATION_270:
+                lx = (uint16_t)(surface->native_height - 1U - ny); ly = nx; break;
+            default: break;
+            }
+            const uint8_t index = surface->data[(size_t)ly * surface->stride + lx];
+            dev->rect_scratch[(size_t)ny * surface->native_width + nx] =
+                surface->palette_rgb565[index];
+        }
+    }
+    (void)quarter_turn;
+    return rgb_st7701_present_rect((rgb_st7701_t *)display->driver, 0, 0,
+                                   surface->native_width, surface->native_height,
+                                   dev->rect_scratch);
+}
+
+/* present_frame: INDEX2 only, matching real precedent (tft_ili9341.c's
+ * present_frame also only supports INDEX2 — same reasoning as above). No
+ * rotation/scaling support yet (real driver supports both; this doesn't)
+ * — flagged, not silently dropped: add if something actually exercises
+ * this path and needs it, rather than guessing at scope now. */
+static esp_err_t op_present_frame(solar_os_board_display_t *display,
+                                  const solar_os_display_raster_t *frame)
+{
+    if (display == NULL || display->driver == NULL || frame == NULL ||
+        frame->format != SOLAR_OS_DISPLAY_FORMAT_INDEX2 || frame->data == NULL ||
+        frame->palette_rgb565 == NULL || frame->palette_size < 4U ||
+        frame->width == 0 || frame->height == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    st7701_device_t *dev = device;
+    const size_t pixel_count = (size_t)frame->width * frame->height;
+    if (dev->rect_scratch_pixels < pixel_count) {
+        return ESP_ERR_NO_MEM;
+    }
+    for (uint16_t y = 0; y < frame->height; y++) {
+        const uint8_t *row = frame->data + (size_t)y * frame->source_stride;
+        for (uint16_t x = 0; x < frame->width; x++) {
+            const uint8_t packed = row[x >> 2];
+            const uint8_t index = (uint8_t)((packed >> ((x & 3U) * 2U)) & 3U);
+            dev->rect_scratch[(size_t)y * frame->width + x] =
+                frame->palette_rgb565[index];
+        }
+    }
+    return rgb_st7701_present_rect((rgb_st7701_t *)display->driver, frame->x, frame->y,
+                                   frame->width, frame->height, dev->rect_scratch);
+}
+
+static const solar_os_board_display_ops_t st7701_ops = {
+    .runtime_ready = op_runtime_ready,
+    .resume = op_resume,
+    .deinit = op_deinit,
+    .brightness_supported = op_brightness_supported,
+    .get_brightness = op_get_brightness,
+    .set_brightness = op_set_brightness,
+    .set_colors = op_set_colors,
+    .present_surface = op_present_surface,
+    .present_frame = op_present_frame,
+    /* controller_mode / controller_mode_values / set_controller_mode /
+     * set_high_refresh_override / present_mono_xbm: left NULL (unused by
+     * this panel — ST7701S here has one fixed mode, no high-refresh
+     * override support, and present_mono_xbm isn't needed since
+     * present_frame/present_surface cover the real paths). Every ops
+     * caller in solar_os_board_display_expansion.c null-checks before
+     * dereferencing, so leaving these NULL is safe, not a shortcut.
+     */
+};
+
+/* ---------------------------------------------------------------------
+ * Attach / detach
+ * --------------------------------------------------------------------- */
+esp_err_t solar_os_st7701_attach(const char *name,
+                                 const solar_os_expansion_binding_t *bindings,
+                                 size_t binding_count)
+{
+    if (name == NULL || name[0] == '\0' || device != NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int hsync, vsync, de, pclk, bl;
+    bool bl_active_high, bl_pwm;
+    ESP_RETURN_ON_ERROR(
+        parse_bindings(bindings, binding_count, &hsync, &vsync, &de, &pclk,
+                       &bl, &bl_active_high, &bl_pwm),
+        "st7701", "invalid bindings");
+
+    st7701_device_t *dev = calloc(1, sizeof(*dev));
+    if (dev == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    strlcpy(dev->name, name, sizeof(dev->name));
+
+    /* Release the panel from reset via the TCA9535 BEFORE touching the
+     * RGB peripheral or running the pre-init sequence — same proven
+     * ordering as the Launcher port's _setup_gpio(). CORRECTED
+     * 2026-09-03: do NOT assert/hold CS here — the real ported init
+     * sequence (run_preinit_sequence(), now implemented below) toggles
+     * CS itself around every single command/data byte, exactly matching
+     * D1L_ST7701_Init.cpp. An earlier version of this function wrongly
+     * held CS asserted for the whole init, which would have broken the
+     * bit-banged protocol entirely (the panel would never see distinct
+     * per-byte chip-select framing). run_preinit_sequence() configures
+     * CS as output itself on its first call, so nothing else needs to
+     * touch that pin here. */
+    esp_err_t err = d1l_expander_pulse(D1L_LCD_RST_PIN, D1L_LCD_RESET_PULSE_US);
+    if (err != ESP_OK) {
+        free(dev);
+        return err;
+    }
+    ESP_LOGI(TAG, "LCD reset succeeded");
+
+    rgb_st7701_config_t cfg = {
+        .hsync_gpio = hsync, .vsync_gpio = vsync, .de_gpio = de, .pclk_gpio = pclk,
+        .backlight_gpio = bl, .backlight_active_high = bl_active_high,
+        .backlight_pwm = bl_pwm,
+        .width = SOLAR_OS_BOARD_DISPLAY_WIDTH, .height = SOLAR_OS_BOARD_DISPLAY_HEIGHT,
+        .hsync_pulse_width = SOLAR_OS_BOARD_LCD_HSYNC_PULSE_WIDTH,
+        .hsync_back_porch = SOLAR_OS_BOARD_LCD_HSYNC_BACK_PORCH,
+        .hsync_front_porch = SOLAR_OS_BOARD_LCD_HSYNC_FRONT_PORCH,
+        .vsync_pulse_width = SOLAR_OS_BOARD_LCD_VSYNC_PULSE_WIDTH,
+        .vsync_back_porch = SOLAR_OS_BOARD_LCD_VSYNC_BACK_PORCH,
+        .vsync_front_porch = SOLAR_OS_BOARD_LCD_VSYNC_FRONT_PORCH,
+        .run_preinit_sequence = run_preinit_sequence,
+    };
+    cfg.data_gpio[0] = SOLAR_OS_BOARD_PIN_LCD_R0; cfg.data_gpio[1] = SOLAR_OS_BOARD_PIN_LCD_R1;
+    cfg.data_gpio[2] = SOLAR_OS_BOARD_PIN_LCD_R2; cfg.data_gpio[3] = SOLAR_OS_BOARD_PIN_LCD_R3;
+    cfg.data_gpio[4] = SOLAR_OS_BOARD_PIN_LCD_R4;
+    cfg.data_gpio[5] = SOLAR_OS_BOARD_PIN_LCD_G0; cfg.data_gpio[6] = SOLAR_OS_BOARD_PIN_LCD_G1;
+    cfg.data_gpio[7] = SOLAR_OS_BOARD_PIN_LCD_G2; cfg.data_gpio[8] = SOLAR_OS_BOARD_PIN_LCD_G3;
+    cfg.data_gpio[9] = SOLAR_OS_BOARD_PIN_LCD_G4; cfg.data_gpio[10] = SOLAR_OS_BOARD_PIN_LCD_G5;
+    cfg.data_gpio[11] = SOLAR_OS_BOARD_PIN_LCD_B0; cfg.data_gpio[12] = SOLAR_OS_BOARD_PIN_LCD_B1;
+    cfg.data_gpio[13] = SOLAR_OS_BOARD_PIN_LCD_B2; cfg.data_gpio[14] = SOLAR_OS_BOARD_PIN_LCD_B3;
+    cfg.data_gpio[15] = SOLAR_OS_BOARD_PIN_LCD_B4;
+
+    err = rgb_st7701_init(&cfg, &dev->panel);
+    if (err != ESP_OK) {
+        free(dev);
+        return err;
+    }
+
+#if SOLAR_OS_D1L_ST7701_TEST_FRAME
+    /* HARDWARE-BRINGUP DIAGNOSTIC, added 2026-09-17 (code-review item 7):
+     * push one solid-color RGB565 frame straight to the panel here, before
+     * any SolarOS/u8g2 rendering exists, to separate "panel/backlight/
+     * RGB-timing problem" from "SolarOS rendering-path problem". If this
+     * solid frame is visible, the panel/timing/backlight chain is good and
+     * any remaining blank-screen symptom is in u8g2/solar_os_gfx instead.
+     * If it's still not visible, the problem is at or below this point
+     * (panel init, RGB timings, or backlight). Disable by leaving
+     * SOLAR_OS_D1L_ST7701_TEST_FRAME at its default of 0 once resolved. */
+    {
+        size_t px_count = (size_t)cfg.width * cfg.height;
+        uint16_t *test_fb = heap_caps_malloc(px_count * sizeof(uint16_t),
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (test_fb != NULL) {
+            for (size_t i = 0; i < px_count; i++) {
+                test_fb[i] = 0xF800; /* solid red, RGB565 */
+            }
+            esp_err_t test_err = rgb_st7701_present(dev->panel, test_fb);
+            ESP_LOGI(TAG, "test frame push: %s",
+                     test_err == ESP_OK ? "OK" : esp_err_to_name(test_err));
+            free(test_fb);
+        } else {
+            ESP_LOGE(TAG, "test frame: failed to allocate %u-pixel buffer",
+                     (unsigned)px_count);
+        }
+    }
+#endif
+
+    dev->tile_width = (uint16_t)((cfg.width + 7U) / 8U);
+    dev->tile_height = (uint16_t)((cfg.height + 7U) / 8U);
+    dev->tile_buffer_size = (size_t)dev->tile_width * 8U * dev->tile_height;
+    dev->tile_buffer = heap_caps_malloc(dev->tile_buffer_size, MALLOC_CAP_8BIT);
+    dev->rect_scratch_pixels = (size_t)cfg.width * cfg.height;
+    dev->rect_scratch = heap_caps_malloc(dev->rect_scratch_pixels * sizeof(uint16_t),
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (dev->tile_buffer == NULL || dev->rect_scratch == NULL) {
+        rgb_st7701_deinit(dev->panel);
+        free(dev->tile_buffer);
+        free(dev->rect_scratch);
+        free(dev);
+        return ESP_ERR_NO_MEM;
+    }
+    dev->fg_rgb565 = 0xFFFF;
+    dev->bg_rgb565 = 0x0000;
+
+    dev->display_info = (u8x8_display_info_t){
+        .tile_width = dev->tile_width, .tile_height = dev->tile_height,
+        .pixel_width = cfg.width, .pixel_height = cfg.height,
+    };
+
+    device = dev;
+    active_display = dev;
+    u8g2_SetupDisplay(&dev->u8g2, st7701_u8x8_display_cb, u8x8_dummy_cb,
+                      u8x8_dummy_cb, u8x8_dummy_cb);
+    u8g2_SetupBuffer(&dev->u8g2, dev->tile_buffer, dev->tile_height,
+                     u8g2_ll_hvline_vertical_top_lsb, U8G2_R0);
+    u8g2_InitDisplay(&dev->u8g2);
+    u8g2_SetPowerSave(&dev->u8g2, 0);
+    ESP_LOGI("solar_os_st7701", "DIAG u8g2 size=%ux%u buf=%p board=%ux%u",
+             (unsigned)u8g2_GetDisplayWidth(&dev->u8g2),
+             (unsigned)u8g2_GetDisplayHeight(&dev->u8g2),
+             (void *)u8g2_GetBufferPtr(&dev->u8g2),
+             (unsigned)cfg.width, (unsigned)cfg.height);
+
+    dev->display = (solar_os_board_display_t){
+        .ops = &st7701_ops, .driver = dev->panel, .driver_name = "st7701_rgb",
+        .u8g2 = &dev->u8g2, .controller = "ST7701S",
+        .width = cfg.width, .height = cfg.height,
+        .surface_formats = SOLAR_OS_DISPLAY_FORMAT_INDEX8_BIT,
+        .frame_formats = 0, /* TEMP 2026-10-21: INDEX2 frame path off; registration needs preferred_stream_fps != 0 when frame formats are set */
+        .ready = true,
+    };
+    err = solar_os_board_display_register_primary(&dev->display);
+    if (err != ESP_OK) {
+        rgb_st7701_deinit(dev->panel);
+        free(dev->tile_buffer);
+        free(dev->rect_scratch);
+        free(dev);
+        device = NULL;
+        active_display = NULL;
+        return err;
+    }
+    dev->active = true;
+    return ESP_OK;
+}
+
+esp_err_t solar_os_st7701_detach(const char *name)
+{
+    if (device == NULL || name == NULL || strcmp(device->name, name) != 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    solar_os_board_display_unregister_primary(&device->display);
+    rgb_st7701_deinit(device->panel);
+    free(device->tile_buffer);
+    free(device->rect_scratch);
+    free(device);
+    device = NULL;
+    active_display = NULL;
+    return ESP_OK;
+}
+
+static const solar_os_expansion_binding_spec_t binding_specs[] = {
+    {.key = "hsync", .value_hint = "gpio", .kind = SOLAR_OS_EXPANSION_BINDING_GPIO, .role = "hsync", .required = true},
+    {.key = "vsync", .value_hint = "gpio", .kind = SOLAR_OS_EXPANSION_BINDING_GPIO, .role = "vsync", .required = true},
+    {.key = "de", .value_hint = "gpio", .kind = SOLAR_OS_EXPANSION_BINDING_GPIO, .role = "de", .required = true},
+    {.key = "pclk", .value_hint = "gpio", .kind = SOLAR_OS_EXPANSION_BINDING_GPIO, .role = "pclk", .required = true},
+    {.key = "bl", .value_hint = "gpio", .kind = SOLAR_OS_EXPANSION_BINDING_GPIO, .role = "bl", .required = false},
+    {.key = "active", .value_hint = "0|1", .kind = SOLAR_OS_EXPANSION_BINDING_PARAMETER, .role = "active", .required = false, .has_value_range = true, .min_value = 0, .max_value = 1},
+    {.key = "pwm", .value_hint = "0|1", .kind = SOLAR_OS_EXPANSION_BINDING_PARAMETER, .role = "pwm", .required = false, .has_value_range = true, .min_value = 0, .max_value = 1},
+};
+
+const solar_os_expansion_driver_t solar_os_st7701_expansion_driver = {
+    .name = "st7701-rgb",
+    .summary = "480x480 RGB-parallel color LCD (DPI)",
+    .required_capabilities = SOLAR_OS_BOARD_CAP_EXPANSION_GPIO | SOLAR_OS_BOARD_CAP_GFX,
+    .probe_supported = false,
+    .early = true,
+    .binding_specs = binding_specs,
+    .binding_spec_count = sizeof(binding_specs) / sizeof(binding_specs[0]),
+    .attach = solar_os_st7701_attach,
+    .detach = solar_os_st7701_detach,
+};

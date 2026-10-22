@@ -1,3 +1,16 @@
+/*
+ * tca9535.c  --  version 2026-10-21
+ *
+ * CHANGE FROM PREVIOUS VERSION:
+ *   tca9535_init() used to print "TCA9535 not found at 0x20 or 0x39" for ANY
+ *   probe failure, hiding the real error (for example ESP_ERR_INVALID_STATE
+ *   meaning "bus not leased/started", versus ESP_ERR_TIMEOUT meaning "chip
+ *   did not answer"). It now logs the actual error code of each probe, and
+ *   logs the address it found. The function still returns ESP_ERR_NOT_FOUND
+ *   on failure, so callers behave exactly as before.
+ *   Everything else in this file is unchanged.
+ */
+
 #include "tca9535.h"
 
 #include <string.h>
@@ -26,20 +39,28 @@ esp_err_t tca9535_init(tca9535_t *dev, const char *i2c_bus,
     memset(dev, 0, sizeof(*dev));
     strlcpy(dev->i2c_bus, i2c_bus, sizeof(dev->i2c_bus));
 
-    if (solar_os_bus_i2c_probe(i2c_bus, addr_primary) == ESP_OK) {
+    const esp_err_t probe_primary = solar_os_bus_i2c_probe(i2c_bus, addr_primary);
+    if (probe_primary == ESP_OK) {
         dev->addr = addr_primary;
-    } else if (addr_fallback != 0 &&
-               solar_os_bus_i2c_probe(i2c_bus, addr_fallback) == ESP_OK) {
-        dev->addr = addr_fallback;
-        ESP_LOGW(TAG, "TCA9535 found at fallback address 0x%02X", addr_fallback);
+        ESP_LOGI(TAG, "TCA9535 found at 0x%02X", addr_primary);
     } else {
+        esp_err_t probe_fallback = ESP_ERR_INVALID_ARG; /* "not tried" */
         if (addr_fallback != 0) {
-            ESP_LOGE(TAG, "TCA9535 not found at 0x%02X or 0x%02X",
-                     addr_primary, addr_fallback);
-        } else {
-            ESP_LOGE(TAG, "TCA9535 not found at 0x%02X", addr_primary);
+            probe_fallback = solar_os_bus_i2c_probe(i2c_bus, addr_fallback);
         }
-        return ESP_ERR_NOT_FOUND;
+        if (addr_fallback != 0 && probe_fallback == ESP_OK) {
+            dev->addr = addr_fallback;
+            ESP_LOGW(TAG, "TCA9535 found at fallback address 0x%02X", addr_fallback);
+        } else {
+            ESP_LOGE(TAG,
+                     "TCA9535 not found on %s: probe 0x%02X -> %s",
+                     i2c_bus, addr_primary, esp_err_to_name(probe_primary));
+            if (addr_fallback != 0) {
+                ESP_LOGE(TAG, "TCA9535 not found on %s: probe 0x%02X -> %s",
+                         i2c_bus, addr_fallback, esp_err_to_name(probe_fallback));
+            }
+            return ESP_ERR_NOT_FOUND;
+        }
     }
 
     /* Power-on default: every pin is INPUT on both ports. Read the real
@@ -64,7 +85,7 @@ esp_err_t tca9535_set_pin_mode(tca9535_t *dev, uint8_t pin, bool is_output)
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Explicit port dispatch — this is the exact bug class from the
+    /* Explicit port dispatch -- this is the exact bug class from the
      * Launcher port's expSetPin(): do not try to do this with a single
      * 16-bit shift into an 8-bit register. */
     if (pin < 8) {
@@ -72,7 +93,7 @@ esp_err_t tca9535_set_pin_mode(tca9535_t *dev, uint8_t pin, bool is_output)
         if (is_output) {
             dev->config_shadow0 &= (uint8_t)~bit; /* 0 = output */
         } else {
-            dev->config_shadow0 |= bit;           /* 1 = input */
+            dev->config_shadow0 |= bit; /* 1 = input */
         }
         return write_reg(dev, TCA9535_REG_CONFIG0, dev->config_shadow0);
     } else {

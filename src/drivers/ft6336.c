@@ -44,7 +44,7 @@ esp_err_t ft6336_init(const char *i2c_bus,
 {
     if (i2c_bus == NULL || i2c_bus[0] == '\0' ||
         (reset_pin != -1 && (reset_pin < 0 || reset_pin >= 64)) ||
-        irq_pin < 0 || irq_pin >= 64) {
+        (irq_pin != -1 && (irq_pin < 0 || irq_pin >= 64))) {
         return ESP_ERR_INVALID_ARG;
     }
     if (ft6336_ready) {
@@ -78,6 +78,7 @@ esp_err_t ft6336_init(const char *i2c_bus,
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
+    if (irq_pin >= 0) { /* irq optional: -1 = not wired */
     const gpio_config_t input = {
         .pin_bit_mask = 1ULL << (uint32_t)irq_pin,
         .mode = GPIO_MODE_INPUT,
@@ -86,6 +87,7 @@ esp_err_t ft6336_init(const char *i2c_bus,
         .intr_type = GPIO_INTR_DISABLE,
     };
     ESP_RETURN_ON_ERROR(gpio_config(&input), TAG, "interrupt pin config failed");
+    }
 
     uint8_t chip_id = 0;
     esp_err_t err = solar_os_bus_i2c_read_reg(i2c_bus, address,

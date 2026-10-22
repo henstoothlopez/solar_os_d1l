@@ -1044,7 +1044,7 @@ required = true
 allowed = [0x38, 0x48]
 [[drivers.ft6336-d1l.bindings]]
 key = "addr_fallback"
-kind = "i2c_address"
+kind = "parameter"
 hint = "0x38"
 allowed = [0x38, 0x48]
 [[drivers.ft6336-d1l.bindings]]
