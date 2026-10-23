@@ -38,6 +38,50 @@ finally:
     gfx.end()
 ```
 
+
+## Direct DLP connections
+
+When `dlp_client` is selected, `solaros.dlp.connect(stream, format=MONO1,
+timeout_ms=5000)` opens a private DLP connection over a registered exclusive
+duplex byte stream. Python accepts positional arguments or these keywords.
+It does not register a display target or allocate text/graphics composition
+buffers. TCP endpoints can be configured through `solaros.streams.tcp` when
+TCP byte-stream support is available; UART and radio streams are configured
+through their providers.
+
+```python
+import solaros
+
+# Configure once, or use a stream already registered by the shell.
+solaros.streams.tcp.connect("pico0", "192.0.2.10", 7777)
+try:
+    with solaros.dlp.connect("pico0") as link:
+        info = link.info()
+        link.present(bytes(info["frame_bytes"]))  # white MONO1 image
+finally:
+    solaros.streams.tcp.remove("pico0")
+```
+
+Use `info()` for `width`, `height`, `format`, byte `stride`, `frame_bytes`,
+accepted `formats` bitmask, `capabilities`, `model`, and `firmware`.
+`present(pixels)` requires exactly `frame_bytes` packed bytes and returns after
+presentation completes; errors propagate to the script. MONO1 uses black=1,
+LSB-first horizontal bits, with each row padded to a whole byte. GRAY2/GRAY4
+use LSB-first packed indices, GRAY8 uses one byte per pixel, and RGB565_BE
+uses the high byte first. Unused row-padding bits must be zero.
+
+Format constants are `solaros.dlp.MONO1`, `GRAY2`, `GRAY4`, `GRAY8`, and
+`RGB565_BE`; pass `-1` to select the peripheral's preferred format.
+`timeout_ms` accepts 100..60000 and sets discovery and the minimum command
+timeout. Peripheral presentation deadlines may extend command waits.
+
+`close()` releases the stream claim and is idempotent. The connection supports `with`.
+Interpreter teardown also closes all outstanding connections, including after
+an error or cancellation. Each interpreter supports four private connections.
+After an I/O failure, another `present` attempts a fresh connection and full
+repaint; geometry and format capabilities must remain unchanged. Close and
+reconnect if the peripheral configuration changes.
+
 Always put `gfx.end()` in `finally` so an exception releases the display.
 
 ## Draw on an attached display
@@ -76,6 +120,36 @@ maximum of 128 packed bytes per call.
 person = bytes((0x18, 0x3C, 0x18, 0x7E, 0x18, 0x24, 0x42, 0x00))
 gfx.sprite(20, 20, 8, 8, person)
 ```
+
+## Raster images
+
+For JPEG data, camera/RTSP frame decoding, and direct RGB565 presentation, see
+[Camera, streams, and RTSP](python.media.md).
+
+When the firmware includes `media.image`, `solaros.image` decodes static PNG,
+JPEG, GIF, and WebP files into native PSRAM-backed handles. This keeps map tiles
+and other large images outside the MicroPython heap. Up to 16 handles can be
+open at once.
+
+```python
+from solaros import gfx, image
+
+tile = image.open("/sdcard/maps/12/2200/1342.png")
+try:
+    source_width, source_height = image.size(tile)
+    image.draw(tile, -24, 32)
+    image.draw(tile, 240, 32, 128, 128)
+    gfx.present()
+finally:
+    image.close(tile)
+```
+
+`image.draw(handle, x, y)` uses the source size. Supplying both `width` and
+`height` applies nearest-neighbor scaling. Coordinates can be negative and the
+native renderer clips to the display. Drawing is queued with the other graphics
+operations. A queued draw keeps its own reference, so it is safe to close or
+replace a tile immediately after queuing it. `image.close_all()` releases every
+handle owned by the current runtime; interpreter cleanup also does this.
 
 ## Icons
 
@@ -156,6 +230,18 @@ Functions:
 - `present()`: alias for `refresh()`.
 - `getch([timeout_ms])`: return a key code or `None`.
 
+When `media.image` is present, `solaros.image` provides:
+
+- `open(path)`, `load(path)`: decode a static raster and return a handle.
+- `size(handle)`: return `(width, height)`.
+- `to_rgb(handle[, width, height])`: copy packed RGB888 pixels into an owned
+  `bytearray`. Supply both dimensions to resize with nearest-neighbor sampling;
+  otherwise use the source size. The copy remains valid after closing the image.
+  Output is limited to 2 million pixels and must fit the interpreter heap.
+- `draw(handle, x, y[, width, height])`: queue a clipped raster draw.
+- `close(handle)`: close one handle.
+- `close_all()`: close all handles owned by this Python runtime.
+
 Bitmap and sprite rows are packed least-significant bit first, with
 `(width + 7) // 8` bytes per row. Set bits draw in the current color and clear
 bits remain transparent. One call accepts at most 128 packed bytes, enough for
@@ -200,6 +286,17 @@ gfx.end()
 ```
 
 ## Quick reference
+
+With `dlp_client`, `solaros.dlp.connect(stream, format=solaros.dlp.MONO1,
+timeout_ms=5000)` returns a private connection with `info()`, `present(pixels)`,
+and idempotent `close()`. It supports `with`; interpreter teardown also releases
+the exclusive byte-stream claim. `present` accepts exactly the packed
+`info()["frame_bytes"]` bytes and waits for completion. No display is registered.
+`solaros.streams.tcp.connect(name, host, port)` creates an outbound stream;
+`solaros.streams.tcp.remove(name)` removes it after the connection closes.
+With BLE byte-stream support, `solaros.streams.ble.connect(name, address, addr_type)`
+configures a native CoC stream; `solaros.streams.ble.remove(name)` removes it
+after use. See [BLE byte streams](python.media.md#ble-byte-streams).
 
 Python: import solaros; from solaros import gfx. gfx.begin() uses the current
 foreground display and raises RuntimeError from a port/headless shell where

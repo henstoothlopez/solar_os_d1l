@@ -13,7 +13,7 @@
 #define SOLAR_OS_BLE_GATT_UUID_MAX 37
 #define SOLAR_OS_BLE_GATT_MAX_SERVICES 24
 #define SOLAR_OS_BLE_GATT_MAX_CHARACTERISTICS 64
-#define SOLAR_OS_BLE_GATT_VALUE_MAX 128
+#define SOLAR_OS_BLE_GATT_VALUE_MAX 176
 #define SOLAR_OS_BLE_CONNECTION_INVALID UINT16_MAX
 #define SOLAR_OS_BLE_OWNER_MAX 32
 #define SOLAR_OS_BLE_SESSION_INVALID 0U
@@ -23,6 +23,110 @@
 
 typedef uint32_t solar_os_ble_session_t;
 typedef uint32_t solar_os_ble_peer_t;
+
+/* Native HID-over-GATT peripheral. The OS owns the standard report map,
+ * descriptors, encryption, bonding and teardown; scripts only submit typed
+ * keyboard, mouse and gamepad state. One runtime owns the connectable
+ * peripheral lease, shared with the generic application server. */
+#define SOLAR_OS_BLE_HID_KEYBOARD_LED_NUM_LOCK    0x01U
+#define SOLAR_OS_BLE_HID_KEYBOARD_LED_CAPS_LOCK   0x02U
+#define SOLAR_OS_BLE_HID_KEYBOARD_LED_SCROLL_LOCK 0x04U
+#define SOLAR_OS_BLE_HID_KEYBOARD_LED_COMPOSE     0x08U
+#define SOLAR_OS_BLE_HID_KEYBOARD_LED_KANA        0x10U
+#define SOLAR_OS_BLE_HID_HOST_MAX 8U
+
+typedef struct {
+    uint8_t bda[6];
+    uint8_t addr_type;
+    bool connected;
+    /* Best-effort GAP Device Name of the current managed connection. RAM only;
+     * empty while unavailable. Apps own persistent friendly-name caches. */
+    char name[SOLAR_OS_BLE_NAME_MAX];
+} solar_os_ble_hid_host_t;
+
+typedef enum {
+    SOLAR_OS_BLE_HID_CONNECTED,
+    SOLAR_OS_BLE_HID_DISCONNECTED,
+    SOLAR_OS_BLE_HID_SECURED,
+    SOLAR_OS_BLE_HID_KEYBOARD_LEDS,
+    SOLAR_OS_BLE_HID_PASSKEY,
+} solar_os_ble_hid_device_event_type_t;
+
+typedef struct {
+    solar_os_ble_hid_device_event_type_t type;
+    uint32_t peer;
+    uint32_t passkey;
+    uint16_t status;
+    uint8_t keyboard_leds;
+    bool encrypted;
+    bool bonded;
+} solar_os_ble_hid_device_event_t;
+
+typedef struct {
+    bool registered;
+    bool advertising;
+    bool closing;
+    bool connected;
+    bool encrypted;
+    bool bonded;
+    bool keyboard_subscribed;
+    bool mouse_subscribed;
+    bool gamepad_subscribed;
+    uint8_t keyboard_leds;
+    size_t event_capacity;
+    size_t event_count;
+    uint32_t events_dropped;
+    bool manual;
+    bool pairing;
+    bool host_selected;
+    uint8_t host_bda[6];
+    uint8_t host_addr_type;
+    char host_name[SOLAR_OS_BLE_NAME_MAX];
+} solar_os_ble_hid_info_t;
+
+esp_err_t solar_os_ble_hid_device_start(solar_os_ble_session_t session,
+                                        const char *name);
+/* Managed leases start idle. Connect advertises only to the chosen host;
+ * fresh pairing uses a separate identity so old hosts cannot auto-reconnect. */
+esp_err_t solar_os_ble_hid_device_start_managed(solar_os_ble_session_t session,
+                                               const char *name);
+esp_err_t solar_os_ble_hid_device_hosts(solar_os_ble_session_t session,
+    solar_os_ble_hid_host_t *hosts, size_t capacity, size_t *count);
+esp_err_t solar_os_ble_hid_device_connect(solar_os_ble_session_t session,
+                                          const uint8_t bda[6], uint8_t addr_type);
+esp_err_t solar_os_ble_hid_device_forget(solar_os_ble_session_t session,
+                                         const uint8_t bda[6], uint8_t addr_type);
+esp_err_t solar_os_ble_hid_device_disconnect(solar_os_ble_session_t session);
+/* Managed pairing drops the active offer and advertises a fresh static-random
+ * identity; other saved hosts stay paired. Legacy leases reset the old host. */
+esp_err_t solar_os_ble_hid_device_pair(solar_os_ble_session_t session);
+esp_err_t solar_os_ble_hid_device_stop(solar_os_ble_session_t session);
+esp_err_t solar_os_ble_hid_device_status(solar_os_ble_session_t session,
+                                         solar_os_ble_hid_info_t *info);
+esp_err_t solar_os_ble_hid_device_poll(solar_os_ble_session_t session,
+                                       solar_os_ble_hid_device_event_t *event);
+esp_err_t solar_os_ble_hid_keyboard_press(solar_os_ble_session_t session,
+                                          const uint16_t *keys,
+                                          size_t key_count);
+esp_err_t solar_os_ble_hid_keyboard_release(solar_os_ble_session_t session,
+                                            const uint16_t *keys,
+                                            size_t key_count);
+esp_err_t solar_os_ble_hid_keyboard_release_all(solar_os_ble_session_t session);
+esp_err_t solar_os_ble_hid_mouse_move(solar_os_ble_session_t session,
+                                      int32_t x,
+                                      int32_t y);
+esp_err_t solar_os_ble_hid_mouse_button(solar_os_ble_session_t session,
+                                        uint8_t button,
+                                        bool pressed);
+esp_err_t solar_os_ble_hid_gamepad_axis(solar_os_ble_session_t session,
+                                        int axis,
+                                        int16_t value);
+esp_err_t solar_os_ble_hid_gamepad_button(solar_os_ble_session_t session,
+                                          uint8_t button,
+                                          bool pressed);
+esp_err_t solar_os_ble_hid_gamepad_hat(solar_os_ble_session_t session,
+                                       uint8_t hat);
+esp_err_t solar_os_ble_hid_gamepad_send(solar_os_ble_session_t session);
 
 /* Application peripheral API. One owned legacy-advertising lease; incoming
  * links share the stack/controller capacity with outgoing peers. Local IDs and
@@ -101,6 +205,8 @@ typedef struct {
 
 typedef struct {
     bool connected;
+    bool encrypted;
+    bool bonded;
     uint8_t bda[6];
     uint8_t addr_type;
     uint16_t conn_id;
@@ -162,6 +268,8 @@ esp_err_t solar_os_ble_session_get_info(solar_os_ble_session_t session,
                                       solar_os_ble_session_info_t *info);
 esp_err_t solar_os_ble_session_connect(solar_os_ble_session_t session,
     const uint8_t bda[6], uint8_t addr_type, uint32_t timeout_ms);
+esp_err_t solar_os_ble_session_pair(solar_os_ble_session_t session,
+    uint32_t passkey, uint32_t timeout_ms);
 esp_err_t solar_os_ble_session_services(solar_os_ble_session_t session,
     solar_os_ble_gatt_service_t *services, size_t max_services, size_t *count);
 esp_err_t solar_os_ble_session_characteristics(solar_os_ble_session_t session,
@@ -201,6 +309,11 @@ esp_err_t solar_os_ble_peer_subscribe(solar_os_ble_session_t session,
 esp_err_t solar_os_ble_peer_connect(solar_os_ble_session_t session,
     const uint8_t bda[6], uint8_t addr_type, uint32_t timeout_ms, solar_os_ble_peer_t *peer);
 esp_err_t solar_os_ble_peer_disconnect(solar_os_ble_session_t session, solar_os_ble_peer_t peer);
+/* Starts Secure Connections pairing for one connected peer and supplies the
+ * six-digit passkey when the peer displays it. Security state is peer-local;
+ * unrelated HID and GATT links keep their existing pairing behavior. */
+esp_err_t solar_os_ble_peer_pair(solar_os_ble_session_t session,
+    solar_os_ble_peer_t peer, uint32_t passkey, uint32_t timeout_ms);
 esp_err_t solar_os_ble_peer_get_info(solar_os_ble_session_t session, solar_os_ble_peer_t peer,
     solar_os_ble_session_info_t *info);
 esp_err_t solar_os_ble_peer_services(solar_os_ble_session_t session, solar_os_ble_peer_t peer,
@@ -230,6 +343,7 @@ void solar_os_ble_resume(void);
  * connection. Writes without response wait for local completion, not peer ACK.
  * Reconnect may return INVALID_STATE until backend retirement completes. */
 esp_err_t solar_os_ble_gatt_connect(const uint8_t bda[6], uint8_t addr_type, uint32_t timeout_ms);
+esp_err_t solar_os_ble_gatt_pair(uint32_t passkey, uint32_t timeout_ms);
 esp_err_t solar_os_ble_gatt_disconnect(void);
 void solar_os_ble_gatt_get_status(solar_os_ble_gatt_status_t *status);
 esp_err_t solar_os_ble_gatt_services(solar_os_ble_gatt_service_t *services,

@@ -68,6 +68,34 @@ static lua_State *new_vm(void)
         {"send", solua_ble_server_send}, {"disconnect", solua_ble_server_disconnect}, {NULL, NULL},
     };
     lua_newtable(L); luaL_setfuncs(L, server_methods, 0); lua_setglobal(L, "server");
+    const luaL_Reg hid_methods[] = {
+        {"start", solua_ble_hid_start}, {"pair", solua_ble_hid_pair},
+        {"stop", solua_ble_hid_stop},
+        {"hosts", solua_ble_hid_hosts}, {"connect", solua_ble_hid_connect},
+        {"forget", solua_ble_hid_forget}, {"disconnect", solua_ble_hid_disconnect},
+        {"status", solua_ble_hid_status}, {"poll", solua_ble_hid_poll}, {NULL, NULL},
+    };
+    const luaL_Reg hid_keyboard_methods[] = {
+        {"press", solua_ble_hid_keyboard_press},
+        {"release", solua_ble_hid_keyboard_release},
+        {"release_all", solua_ble_hid_keyboard_release_all}, {NULL, NULL},
+    };
+    const luaL_Reg hid_mouse_methods[] = {
+        {"move", solua_ble_hid_mouse_move},
+        {"button", solua_ble_hid_mouse_button}, {NULL, NULL},
+    };
+    const luaL_Reg hid_gamepad_methods[] = {
+        {"axis", solua_ble_hid_gamepad_axis},
+        {"button", solua_ble_hid_gamepad_button},
+        {"hat", solua_ble_hid_gamepad_hat},
+        {"send", solua_ble_hid_gamepad_send}, {NULL, NULL},
+    };
+    lua_newtable(L);
+    luaL_setfuncs(L, hid_methods, 0);
+    lua_newtable(L); luaL_setfuncs(L, hid_keyboard_methods, 0); lua_setfield(L, -2, "keyboard");
+    lua_newtable(L); luaL_setfuncs(L, hid_mouse_methods, 0); lua_setfield(L, -2, "mouse");
+    lua_newtable(L); luaL_setfuncs(L, hid_gamepad_methods, 0); lua_setfield(L, -2, "gamepad");
+    lua_setglobal(L, "hid");
     return L;
 }
 
@@ -128,14 +156,14 @@ int main(void)
         "local s = gatt.status(peer); "
         "assert(s.connected and not s.retiring and s.mtu == 247); "
         "assert(s.owner == 'lua.app' and s.address == '01:02:03:04:05:06'); "
-        "assert(s.addr_type == 1 and s.max_value_bytes == 128); "
+        "assert(s.addr_type == 1 and s.max_value_bytes == 176); "
         "local services = gatt.services(peer); "
         "assert(#services == 24 and services[1].index == 0); "
         "assert(services[1].uuid == '0x180f' and services[1].primary); "
         "local chars = gatt.characteristics(peer, services[1].index); "
         "assert(#chars == 1 and chars[1].handle == 3 and chars[1].properties == 2); "
         "assert(chars[1].uuid == '0x2a19'); "
-        "assert(gatt.read(peer, 3) == string.rep('B', 128)); "
+        "assert(gatt.read(peer, 3) == string.rep('B', 176)); "
         "gatt.write(peer, 3, string.char(0, 255)); "
         "assert(not pcall(gatt.read, peer, 0)); "
         "assert(not pcall(gatt.read, peer, 65536)); "
@@ -146,7 +174,7 @@ int main(void)
         "assert(not pcall(gatt.characteristics, peer, 4294967296)); "
         "assert(not pcall(gatt.write, peer, 3, 123)); "
         "assert(not pcall(gatt.write, peer, 3, '')); "
-        "assert(not pcall(gatt.write, peer, 3, string.rep('x', 129))); "
+        "assert(not pcall(gatt.write, peer, 3, string.rep('x', 177))); "
         "assert(not pcall(gatt.write, peer, 3, 'xx', 0));");
     assert(write_response);
     run(L, "gatt.subscribe(peer, 3, true)");
@@ -219,7 +247,7 @@ int main(void)
     assert(fake_server_request.indicate && fake_server_request.value_len==2 && fake_server_request.value[0]==128);
     run(L, "assert(not pcall(server.create,'name',0)); assert(not pcall(server.service,'a'..string.char(0)..'b'))");
     run(L, "assert(not pcall(server.characteristic,svc,'abcd',256)); assert(not pcall(server.set,0,'x'))");
-    run(L, "assert(not pcall(server.set,chr,string.rep('x',129))); assert(not pcall(server.send,7,chr,'x',1))");
+    run(L, "assert(not pcall(server.set,chr,string.rep('x',177))); assert(not pcall(server.send,7,chr,'x',1))");
     run(L, "server.disconnect(7); server.stop(); server.close(); server.create('again')");
     assert(fake_server_owner==solua_ble_session);
     solar_os_ble_session_t outsider;
@@ -227,10 +255,40 @@ int main(void)
     solar_os_ble_server_request_t request={.op=SOLAR_OS_BLE_SERVER_STATUS};
     assert(solar_os_ble_server_request(outsider,&request)==ESP_ERR_INVALID_STATE);
     assert(solar_os_ble_session_close(outsider)==ESP_OK && fake_server_owner==solua_ble_session);
-    request.value_len=129;
+    request.value_len=177;
     assert(solar_os_ble_server_request(solua_ble_session,&request)==ESP_ERR_INVALID_ARG);
     request.value_len=0; memset(request.text,'x',sizeof(request.text));
     assert(solar_os_ble_server_request(solua_ble_session,&request)==ESP_ERR_INVALID_ARG);
+    run(L, "assert(not pcall(hid.start,'')); assert(not pcall(hid.start,string.rep('x',27))); "
+           "assert(not pcall(hid.start,'x'..string.char(0))); hid.start('Lua HID'); hid.pair(); "
+           "assert(hid.status().event_capacity==16 and hid.status().host_name=='Desktop' and hid.poll()==nil)");
+    run(L, "assert(not pcall(hid.start,'name',1)); hid.start('Lua HID',true)");
+    assert(fake_hid_request.manual);
+    run(L, "local h=hid.hosts()[1]; assert(h.name=='Desktop' and h.connected and h.addr_type==1 "
+           "and h.address=='01:02:03:04:05:06'); "
+           "assert(not pcall(hid.connect,'bad')); "
+           "assert(not pcall(hid.forget,'01:02:03:04:05:06',-1)); "
+           "assert(not pcall(hid.connect,'01:02:03:04:05:06',2)); "
+           "hid.connect('01:02:03:04:05:06',1)");
+    assert(fake_hid_request.op == SOLAR_OS_BLE_HID_OP_CONNECT && fake_hid_request.addr_type==1 &&
+           !memcmp(fake_hid_request.bda, (uint8_t[]){1,2,3,4,5,6}, 6));
+    run(L, "hid.forget('01:02:03:04:05:06'); hid.disconnect(); hid.poll()");
+    assert(fake_hid_request.op == SOLAR_OS_BLE_HID_OP_POLL);
+    assert(fake_hid_owner == solua_ble_session);
+    fake_hid_event=(solar_os_ble_hid_device_event_t){
+        .type=SOLAR_OS_BLE_HID_PASSKEY,.peer=7,.passkey=12345};
+    fake_hid_event_ready=true;
+    run(L, "local e=hid.poll(); assert(e.type=='passkey' and e.peer==7 and e.passkey==12345)");
+    run(L, "assert(not pcall(hid.keyboard.press)); assert(not pcall(hid.keyboard.press,-1)); "
+           "hid.keyboard.press(260,4); hid.keyboard.release(4); hid.keyboard.release_all()");
+    assert(fake_hid_request.op == SOLAR_OS_BLE_HID_OP_KEYBOARD_RELEASE_ALL);
+    run(L, "hid.mouse.move(-400,500); hid.mouse.button(1,true)");
+    assert(fake_hid_request.op == SOLAR_OS_BLE_HID_OP_MOUSE_BUTTON &&
+           fake_hid_request.button == 1 && fake_hid_request.pressed);
+    run(L, "assert(not pcall(hid.mouse.button,256,true)); "
+           "hid.gamepad.axis(0,-32768); hid.gamepad.button(16,false); "
+           "hid.gamepad.hat(8); hid.gamepad.send(); hid.stop()");
+    assert(fake_hid_request.op == SOLAR_OS_BLE_HID_OP_STOP && !fake_hid_owner);
     solar_os_ble_session_t server_owner=solua_ble_session;
     solua_ble_destroy(); assert(!fake_server_owner); lua_close(L);
     request=(solar_os_ble_server_request_t){.op=SOLAR_OS_BLE_SERVER_STATUS};

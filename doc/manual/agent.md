@@ -15,7 +15,7 @@ runtimes. It exposes only tools allowed by the current firmware and tool policy.
 
 ## Configure it
 
-The Responses API is recommended for OpenAI reasoning models:
+Set your provider endpoint, model name, and API key. For a Responses endpoint:
 
 ```text
 agent config endpoint https://api.openai.com/v1/responses
@@ -37,6 +37,20 @@ Run `agent` or `agent new`, enter a message, and wait for the response. The
 bottom bar shows
 the latest input, output, and total token counts. Tool activity stays in the
 conversation, while usage does not.
+
+Use `agent --tts` for a spoken conversation, or add `--tts` before `new`,
+`resume`, or `ask`. Start `speechd` with the desired PicoTTS voice first:
+
+```text
+job start speechd /voices/en-US
+agent --tts
+agent --tts ask What is the battery status?
+```
+
+The answer remains written in the terminal. Speech is queued only after a
+successful final model answer. Connection status, retries, tool calls, tool
+results, confirmation prompts, and intermediate model text preceding a tool
+call remain silent. `--tts` currently selects the local PicoTTS speech service.
 
 Completed turns are saved. Inspect and resume them explicitly:
 
@@ -66,12 +80,9 @@ Which background jobs are running, and which stopped jobs could start now?
 Why is email-sync waiting?
 ```
 
-The answer is based on the same worker-stack admission policy used by SolarOS.
-It includes current internal and PSRAM headroom, each job's declared stack
-placement, generation, current resource claims, start disposition, and last
-error. A `ready` disposition covers declared worker-stack admission only; a
-job may still need dynamic buffers or an argument-selected resource when it
-actually starts.
+The answer reports memory, resource owners, and job errors. A job shown as
+`ready` has enough declared worker-stack memory at that moment; it may still
+need more buffers or an available resource when it starts.
 
 ## Troubleshooting
 
@@ -80,19 +91,21 @@ actually starts.
   the last request used from its configured budget.
 - If a generated script guesses an API or display name, ask the agent to call
   `solaros_reference` with the language and exact task, then call the relevant
-  discovery tool. The reference lookup returns focused sections from the
-  firmware's Python and Lua manuals rather than only their page summaries.
+  discovery tool. The reference lookup returns Quick references from the
+  signed downloaded manual. If a topic directs you to install the manual,
+  run `help update` before using its APIs.
 - If a call is denied, the model receives a structured denial and can explain
   the result or choose another approach.
 
 ## Quick reference
 
-Use `agent` or `agent new` for a new durable foreground conversation,
-`agent list` to inspect saved slots, `agent resume SLOT` to restore one, and
-`agent delete SLOT` to remove one. `agent ask PROMPT` makes an unsaved one-shot
-request. Configure endpoint, model, key, reasoning, tool policy, and maximum
-tools with `agent config`. `agent tools` reports the installed typed tools and
-their policy disposition. `jobs_list` is read-only and reports actual job
-admission and memory state; it does not start or stop jobs. The default
+Use `agent` or `agent new` for a new durable foreground conversation. Add
+`--tts` immediately after `agent` to speak final answers through a running
+local `speechd`. `agent list` inspects saved slots, `agent resume SLOT` restores
+one, and `agent delete SLOT` removes one. `agent ask PROMPT` makes an unsaved
+one-shot request. Configure endpoint, model, key, reasoning, tool policy, and
+maximum tools with `agent config`. `agent tools` reports the installed typed
+tools and their policy disposition. `jobs_list` is read-only and reports actual
+job admission and memory state; it does not start or stop jobs. The default
 `confirm` policy runs read-only tools and requires local approval for sensitive,
 mutating, or disruptive calls. `Esc` or the app-exit key returns to the shell.

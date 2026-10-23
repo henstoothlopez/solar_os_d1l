@@ -7,6 +7,7 @@
 #include <strings.h>
 
 #include "solar_os_log.h"
+#include "solar_os_network.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "lwip/inet.h"
@@ -14,7 +15,6 @@
 #include "ping/ping_sock.h"
 #include "solar_os_queue.h"
 #include "solar_os_storage.h"
-#include "solar_os_wifi.h"
 
 #define SOLAR_OS_NET_PING_DEFAULT_TIMEOUT_MS 1000U
 #define SOLAR_OS_NET_PING_DEFAULT_INTERVAL_MS 1000U
@@ -48,13 +48,12 @@ static void ping_copy_ip(const ip_addr_t *addr, char *buffer, size_t len)
     }
 }
 
-static esp_err_t net_lookup_hosts_file(const char *host, char *resolved_host, size_t resolved_host_len)
+esp_err_t solar_os_net_hosts_visit(solar_os_net_host_visitor_t visitor, void *user)
 {
-    if (host == NULL || host[0] == '\0' || resolved_host == NULL || resolved_host_len == 0) {
+    if (visitor == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    strlcpy(resolved_host, host, resolved_host_len);
     if (!solar_os_storage_is_mounted()) {
         return ESP_ERR_NOT_FOUND;
     }
@@ -72,8 +71,8 @@ static esp_err_t net_lookup_hosts_file(const char *host, char *resolved_host, si
     }
 
     char line[192];
-    bool found = false;
-    while (fgets(line, sizeof(line), file) != NULL) {
+    bool keep_visiting = true;
+    while (keep_visiting && fgets(line, sizeof(line), file) != NULL) {
         char *comment = strchr(line, '#');
         if (comment != NULL) {
             *comment = '\0';
@@ -87,19 +86,48 @@ static esp_err_t net_lookup_hosts_file(const char *host, char *resolved_host, si
 
         const char *name = NULL;
         while ((name = strtok_r(NULL, " \t\r\n", &saveptr)) != NULL) {
-            if (strcasecmp(name, host) == 0) {
-                strlcpy(resolved_host, address, resolved_host_len);
-                found = true;
+            if (!visitor(address, name, user)) {
+                keep_visiting = false;
                 break;
             }
-        }
-        if (found) {
-            break;
         }
     }
 
     fclose(file);
-    return found ? ESP_OK : ESP_ERR_NOT_FOUND;
+    return ESP_OK;
+}
+
+typedef struct {
+    const char *host;
+    char *resolved_host;
+    size_t resolved_host_len;
+    bool found;
+} net_host_lookup_t;
+
+static bool net_lookup_host_visitor(const char *address, const char *alias, void *user)
+{
+    net_host_lookup_t *lookup = user;
+    if (strcasecmp(alias, lookup->host) != 0) {
+        return true;
+    }
+    strlcpy(lookup->resolved_host, address, lookup->resolved_host_len);
+    lookup->found = true;
+    return false;
+}
+
+static esp_err_t net_lookup_hosts_file(const char *host, char *resolved_host, size_t resolved_host_len)
+{
+    if (host == NULL || host[0] == '\0' || resolved_host == NULL || resolved_host_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    strlcpy(resolved_host, host, resolved_host_len);
+    net_host_lookup_t lookup = {
+        .host = host,
+        .resolved_host = resolved_host,
+        .resolved_host_len = resolved_host_len,
+    };
+    const esp_err_t err = solar_os_net_hosts_visit(net_lookup_host_visitor, &lookup);
+    return err != ESP_OK ? err : lookup.found ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
 static esp_err_t ping_resolve_host(const char *host,
@@ -306,9 +334,7 @@ esp_err_t solar_os_net_ping(const char *host,
         return ESP_ERR_INVALID_ARG;
     }
 
-    solar_os_wifi_status_t wifi_status;
-    solar_os_wifi_get_status(&wifi_status);
-    if (!wifi_status.has_ip) {
+    if (!solar_os_network_path_get_preferred(NULL)) {
         return ESP_ERR_INVALID_STATE;
     }
 

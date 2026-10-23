@@ -17,6 +17,7 @@
 #define SOLAR_OS_BLE_KEYBOARD_REPEAT_DELAY_MIN_MS SOLAR_OS_INPUT_REPEAT_DELAY_MIN_MS
 #define SOLAR_OS_BLE_KEYBOARD_REPEAT_DELAY_MAX_MS SOLAR_OS_INPUT_REPEAT_DELAY_MAX_MS
 #define SOLAR_OS_BLE_KEYBOARD_MAX_PRESSED_KEYS 6U
+#define SOLAR_OS_BLE_KEYBOARD_KEEPALIVE_INTERVAL_MS 30000U
 
 typedef enum {
     SOLAR_OS_BLE_KEYBOARD_LAYOUT_US,
@@ -35,6 +36,20 @@ typedef struct {
     uint8_t keycodes[SOLAR_OS_BLE_KEYBOARD_MAX_PRESSED_KEYS];
     uint8_t chars[SOLAR_OS_BLE_KEYBOARD_MAX_PRESSED_KEYS];
 } solar_os_ble_keyboard_key_state_t;
+
+typedef enum {
+    SOLAR_OS_BLE_KEYBOARD_KEEPALIVE_UNAVAILABLE,
+    SOLAR_OS_BLE_KEYBOARD_KEEPALIVE_EXIT_SUSPEND,
+    SOLAR_OS_BLE_KEYBOARD_KEEPALIVE_INFORMATION_READ,
+} solar_os_ble_keyboard_keepalive_method_t;
+
+typedef struct {
+    solar_os_ble_keyboard_keepalive_method_t method;
+    uint32_t attempts;
+    esp_err_t last_status;
+    bool attempted;
+    bool pending;
+} solar_os_ble_keyboard_keepalive_status_t;
 
 /* Compatibility alias; generic scanning and GATT live in solar_os_ble.h. */
 typedef solar_os_ble_scan_result_t solar_os_ble_keyboard_scan_result_t;
@@ -64,6 +79,15 @@ void solar_os_ble_keyboard_resume(void);
 bool solar_os_ble_keyboard_is_connected(void);
 bool solar_os_ble_keyboard_is_scanning(void);
 bool solar_os_ble_keyboard_is_pairing(void);
+bool solar_os_ble_keyboard_keepalive_enabled(void);
+esp_err_t solar_os_ble_keyboard_set_keepalive_enabled(bool enabled);
+void solar_os_ble_keyboard_get_keepalive_status(
+    solar_os_ble_keyboard_keepalive_status_t *status);
+const char *solar_os_ble_keyboard_keepalive_method_name(
+    solar_os_ble_keyboard_keepalive_method_t method);
+void solar_os_ble_keyboard_poll(uint32_t now_ms);
+/* Advances when a keyboard reconnects or reports a new physical key press. */
+uint32_t solar_os_ble_keyboard_wake_generation(void);
 size_t solar_os_ble_keyboard_remembered_count(void);
 void solar_os_ble_keyboard_get_status(char *buffer, size_t buffer_len);
 size_t solar_os_ble_keyboard_read_chars(char *buffer, size_t buffer_len);
@@ -76,3 +100,8 @@ const char *solar_os_ble_keyboard_layout_name(solar_os_ble_keyboard_layout_t lay
 bool solar_os_ble_keyboard_parse_layout(const char *name, solar_os_ble_keyboard_layout_t *layout);
 const char *solar_os_ble_keyboard_addr_type_name(uint8_t addr_type);
 bool solar_os_ble_keyboard_parse_addr_type(const char *name, uint8_t *addr_type);
+
+/* Internal host arbitration. Generic central links pause an unavailable
+ * keyboard's reconnect scanner, but never disconnect an attached keyboard. */
+esp_err_t solar_os_ble_keyboard_client_acquire(uint32_t timeout_ms);
+void solar_os_ble_keyboard_client_release(void);

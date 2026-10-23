@@ -11,7 +11,7 @@
 #include "solar_os_shell_io.h"
 
 static const char * const agent_commands[] = {
-    "help", "new", "list", "resume", "delete", "status", "tools",
+    "--tts", "help", "new", "list", "resume", "delete", "status", "tools",
     "config", "forget", "ask", "script",
 };
 static const char * const agent_config_fields[] = {
@@ -24,9 +24,12 @@ static void agent_usage(solar_os_shell_io_t *io)
     solar_os_shell_io_newline(io);
     solar_os_shell_io_writeln(io, "usage:");
     solar_os_shell_io_writeln(io, "  agent");
+    solar_os_shell_io_writeln(io, "  agent --tts");
     solar_os_shell_io_writeln(io, "  agent new");
+    solar_os_shell_io_writeln(io, "  agent --tts new");
     solar_os_shell_io_writeln(io, "  agent list");
     solar_os_shell_io_writeln(io, "  agent resume SLOT");
+    solar_os_shell_io_writeln(io, "  agent --tts resume SLOT");
     solar_os_shell_io_writeln(io, "  agent delete SLOT");
     solar_os_shell_io_writeln(io, "  agent help");
     solar_os_shell_io_writeln(io, "  agent status");
@@ -43,6 +46,7 @@ static void agent_usage(solar_os_shell_io_t *io)
     solar_os_shell_io_writeln(io, "  agent config max-tools 1..32");
     solar_os_shell_io_writeln(io, "  agent forget");
     solar_os_shell_io_writeln(io, "  agent ask PROMPT...");
+    solar_os_shell_io_writeln(io, "  agent --tts ask PROMPT...");
     solar_os_shell_io_writeln(
         io,
         "  agent script python|lua (-c SOURCE | FILE) [ARGS...]");
@@ -58,13 +62,13 @@ static void agent_conversations(solar_os_shell_io_t *io)
         SOLAR_OS_AGENT_CONVERSATION_LIST_MAX,
         &count);
     if (err != ESP_OK) {
-        solar_os_shell_io_printf(io,
+        solar_os_shell_io_table_printf(io,
                                  "agent: list failed: %s\n",
                                  solar_os_shell_error_text(err));
         return;
     }
     if (count == 0) {
-        solar_os_shell_io_writeln(io, "No saved conversations.");
+        solar_os_shell_io_table_writeln(io, "No saved conversations.");
         return;
     }
     size_t cols = solar_os_shell_io_cols(io);
@@ -82,7 +86,7 @@ static void agent_conversations(solar_os_shell_io_t *io)
     if (cols < 72U || !slots_only) {
         for (size_t i = 0; i < count; i++) {
             const int value_width = cols > 9U ? (int)(cols - 9U) : 1;
-            solar_os_shell_io_printf(io,
+            solar_os_shell_io_table_printf(io,
                                      "%s  %u turn%s\n"
                                      "  model: %.*s\n"
                                      "  title: %.*s\n",
@@ -96,11 +100,11 @@ static void agent_conversations(solar_os_shell_io_t *io)
         }
         return;
     }
-    solar_os_shell_io_writeln(io,
+    solar_os_shell_io_table_writeln(io,
                               "SLOT TURNS  MODEL             TITLE");
     const int title_width = (int)(cols - 30U);
     for (size_t i = 0; i < count; i++) {
-        solar_os_shell_io_printf(io,
+        solar_os_shell_io_table_printf(io,
                                  "%-4s %-6u %-17.17s %.*s\n",
                                  items[i].id,
                                  (unsigned int)items[i].turn_count,
@@ -130,11 +134,11 @@ static void agent_tools(solar_os_shell_io_t *io)
 {
     solar_os_agent_status_t status = {0};
     (void)solar_os_agent_get_status(&status);
-    solar_os_shell_io_printf(
+    solar_os_shell_io_table_printf(
         io,
         "Policy: %s\n",
         solar_os_agent_tool_policy_name(status.tool_policy));
-    solar_os_shell_io_writeln(
+    solar_os_shell_io_table_writeln(
         io,
         "Name               Domain    Risk            Available  Policy   Requirement");
     const size_t count = solar_os_agent_tools_count();
@@ -149,7 +153,7 @@ static void agent_tools(solar_os_shell_io_t *io)
             "allow" :
             (decision == SOLAR_OS_AGENT_TOOL_POLICY_CONFIRM_ONCE ?
                 "confirm" : "deny");
-        solar_os_shell_io_printf(
+        solar_os_shell_io_table_printf(
             io,
             "%-18s %-9s %-15s %-10s %-8s %s\n",
             tool.provider.name,
@@ -303,6 +307,26 @@ void solar_os_shell_cmd_agent(solar_os_context_t *ctx, int argc, char **argv)
         return;
     }
 
+    if (argc >= 2 && strcmp(argv[1], "--tts") == 0) {
+        const bool launch = argc == 2 ||
+            (argc == 3 && strcmp(argv[2], "new") == 0) ||
+            (argc == 4 && strcmp(argv[2], "resume") == 0) ||
+            (argc >= 4 && strcmp(argv[2], "ask") == 0);
+        if (launch) {
+            agent_launch(ctx, io, argc, argv);
+        } else if (argc == 3 && strcmp(argv[2], "help") == 0) {
+            agent_usage(io);
+        } else {
+            solar_os_shell_diag_problem(
+                io,
+                "agent --tts",
+                "unsupported command",
+                "agent --tts [new|resume SLOT|ask PROMPT...]",
+                NULL);
+        }
+        return;
+    }
+
     if (argc == 1) {
         agent_launch(ctx, io, argc, argv);
         return;
@@ -371,7 +395,7 @@ void solar_os_shell_cmd_agent(solar_os_context_t *ctx, int argc, char **argv)
                                    "agent",
                                    argc,
                                    argv,
-                                   "agent help|new|list|resume|delete|status|tools|config|forget|ask|script",
+                                   "agent [--tts]|help|new|list|resume|delete|status|tools|config|forget|ask|script",
                                    agent_commands,
                                    sizeof(agent_commands) / sizeof(agent_commands[0]));
 }

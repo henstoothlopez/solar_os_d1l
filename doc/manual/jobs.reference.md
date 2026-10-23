@@ -11,7 +11,7 @@ packages_any = []
 
 This document covers the built-in background job registry. Jobs are autonomous
 workers such as log followers, DAQ capture, HTTP serving, Telnet shell access,
-SLIP, chatd, or NTP sync. Foreground applications are documented in
+SLIP, PPP, chatd, or NTP sync. Foreground applications are documented in
 [apps.md](apps.md), and shell commands are documented in
 [commands.md](commands.md). Port shells are sessions, started with
 `session create shell <port>` plus optional `--term`, `--charset`, and `--size`
@@ -25,13 +25,8 @@ jobs
 job status [name]
 ```
 
-`jobs` is intentionally compact so it fits on the built-in 65-column display
-terminal. It shows job name, state, declared worker-stack requirement, kind,
-event source, tick count, and resource count. Running rows are bold. Use
-`job status <name>` for the summary, owner string, worker-stack placement, last
-error, effective tick interval/deadline, runtime duration statistics, deadline
-misses, and claimed resources. Compact timing lines use `interval/deadline` in
-milliseconds, `n` for dispatches, `us=last/max`, and `miss` for deadline misses.
+`jobs` shows state, worker-stack bytes, and resource counts. Use
+`job status NAME` for errors, resource owners, memory placement, and timings.
 
 ## Job Control
 
@@ -45,23 +40,15 @@ milliseconds, `n` for dispatches, `us=last/max`, and `miss` for deadline misses.
 Only one instance of each job name can run at a time. Starting a running job
 first stops the previous instance, then starts it again with the new arguments.
 
-Jobs have stable owner strings in the form `job:<name>`. Jobs that claim ports,
-files, streams, or network listeners publish those resources through the job
-status model. This keeps port/resource conflict messages readable and avoids
-job-specific inspection code in the shell.
+Jobs report which ports, files, streams, and listeners they own. If a resource
+is busy, stop its current user before starting another job on it.
 
-Job states distinguish a deferred launch from a completed launch attempt:
-
-- `waiting` means SolarOS retained the start request because admitting the
-  declared worker stack would consume the internal-memory reserve. The job is
-  not running yet; the scheduler retries it automatically as memory becomes
-  available.
-- `failed` means SolarOS attempted the job's start callback and it returned a
-  terminal error. `job status <name>` prints that error. A `no memory` failure
-  can still occur when a job or library needs dynamic memory beyond its
-  declared worker stack; that memory is not predictable from the descriptor.
-- `running` means start completed successfully. `stopped` means there is no
-  active or retained launch request.
+- `waiting`: the start request is retained and retries automatically when
+  enough worker memory is available.
+- `failed`: starting or running failed. Check `job status NAME`, fix the cause,
+  and restart. Jobs may need buffers beyond their declared stack size.
+- `running`: the job started successfully.
+- `stopped`: there is no active job or pending start request.
 
 The `STACK` column is the declared worker-stack admission requirement in bytes,
 not a worst-case total-memory estimate. `-` means that the job declares no
@@ -73,21 +60,9 @@ internal largest block of at least `STACK + 1 KiB overhead`. Treat a manual
 check as a snapshot: other work can allocate memory before `job start`, which
 is why SolarOS retains and retries a launch that loses that race.
 
-Jobs that use byte-stream ports claim those ports while running. If a port is
-already owned, SolarOS reports the owner, for example `job log owns cdc0`.
-Radio listeners expose their radio as a custom job resource.
-
-GPIO-key mappings claim each selected pin through the same resource model. The
-`io` application therefore shows assignments such as `key:UP`, their
-`gpio-keys-job` attachment owner, and the board's canonical pin policy without
-special GPIO-key display logic.
-
-Tick intervals and execution-time deadlines are declared by each event-driven
-job. A zero descriptor value selects the runtime default. Deadline misses do
-not forcibly terminate a cooperative handler; SolarOS counts them, records the
-last and maximum duration, and emits rate-limited warnings. The DAQ and log
-handlers only enqueue work, so their stream, filesystem, and port I/O runs in
-isolated worker tasks instead of the display scheduler.
+Timing fields show the effective interval/deadline, last and maximum execution
+time, and missed deadlines. A missed deadline is recorded; it does not forcibly
+stop a handler.
 
 Compact list example:
 
@@ -126,13 +101,8 @@ stream
 
 ## Startup
 
-Jobs can be started from the normal startup script:
-
-```text
-/.shell/startup
-```
-
-Example:
+Jobs stop at reboot. Run `setterm startup` to find the selected startup script
+and add the commands you want to run at boot. For example:
 
 ```text
 wifi on
@@ -251,6 +221,14 @@ Notes:
 - If the Link disappears, the bridge releases its serial port and stops with
   the Link error.
 - This is the clean base for USB-to-UART converter style workflows.
+
+## irc-sync
+
+Maintains enabled native IRC instances over verified TLS. Each instance has
+independent reconnect and channel membership state. Configure profiles with
+`irc`, then run `job start irc-sync`. The job accepts no arguments.
+Use `irc status` for each connection and `job stop irc-sync` to stop all IRC
+connections. Chat and retained messages remain available. See [Native IRC](messaging.irc.md).
 
 ## gateway-sync
 
@@ -428,6 +406,27 @@ Control definitions are runtime configuration. Put the `control create`,
 restore a hardware setup after reboot. See `man controls` for calibration,
 manual script inputs, MIDI examples, and inspection commands.
 
+## gestures
+
+Gesture-to-command listener. Rules are configured independently with `gesture
+bind`, while this job owns observation and dispatch:
+
+```text
+gesture bind source=gesture0 gesture=flick direction=east -- input emit ALT+RIGHT
+gesture bind source=gesture0 gesture=flick direction=west -- input emit ALT+LEFT
+job start gestures
+job status gestures
+job stop gestures
+```
+
+Stopping the job preserves the rules, prevents new gesture actions, and drops
+queued actions. A command already executing finishes normally. Use `gesture
+bindings` to inspect rules and counters, `gesture unbind <id>` to remove one, or
+`gesture unbind all` to clear the table and reset the next ID to 1. Rules and job
+state are volatile; recreate them in the startup script when persistence is
+needed. The command worker is created on demand and releases its internal stack
+when its queue is idle.
+
 ## osc
 
 OSC 1.0 IPv4 UDP adapter for automatic incoming native-parameter writes and
@@ -453,6 +452,149 @@ OSC has no authentication or encryption. Start the job only on a trusted LAN,
 SoftAP, or WireGuard path. Bindings are volatile and can be restored from
 `/.shell/startup`. See `man osc` for address mapping, binding syntax, limits,
 and the sampled-event caveat.
+
+## cam-webd
+
+HTTP access to the fitted camera as one-shot JPEG images or a single-client
+MJPEG stream.
+
+```text
+job start cam-webd [qvga|vga] [fps] [auth=none|required]
+job status cam-webd
+job stop cam-webd
+```
+
+The defaults are QVGA JPEG at five frames per second with no authentication.
+The optional frame rate is `1..30`; JPEG quality is fixed at 12. Options can be
+given in any order. The job leases the camera as `job:cam-webd` until it stops.
+The shell `camera` command and other camera users report that owner while the
+lease is active.
+
+API:
+
+```text
+GET /api/camera
+GET /camera.jpg
+GET /camera.mjpeg
+```
+
+With the default `auth=none`, the endpoints can be opened directly:
+
+```text
+http://device/camera.mjpeg
+```
+
+Use `auth=required` to require `Authorization: Bearer <code>` on all three
+endpoints. Starting in that mode prints a random six-digit access code. For
+example:
+
+```text
+curl -H 'Authorization: Bearer 123456' http://device/camera.jpg -o frame.jpg
+curl -H 'Authorization: Bearer 123456' http://device/camera.mjpeg -o stream.mjpeg
+```
+
+The MJPEG endpoint uses the shared HTTP server's asynchronous request path.
+Only one stream client is admitted. The worker captures and transmits one
+camera framebuffer at a time and releases it on every success or error path;
+there is no frame queue or JPEG copy. A slow client therefore reduces the
+capture rate through socket backpressure instead of consuming more memory.
+Snapshot requests are rejected while the stream owns the capture path.
+
+The server is plain HTTP. With the default `auth=none`, anyone who can reach the
+device can view the camera. Use it only on a trusted Wi-Fi network. The optional
+access code limits casual access but does not encrypt images and is not intended
+for exposure to an untrusted network.
+
+## rtspd
+
+Publish explicitly selected sources as a standard single-client RTSP session.
+Video uses RTP/JPEG; audio uses RTP/L16 PCM. Each enabled track has its own
+RTP/RTCP UDP port pair, SSRC, and sender reports, with a shared RTCP CNAME and
+session start clock.
+
+```text
+job start rtspd [video=<stream>|none] [audio=<stream>|none] [size=qvga|vga] [fps=0..30] [port=<port>]
+job start rtspd video=camera0 audio=none size=qvga fps=10
+job start rtspd video=none audio=audio0.capture
+job start rtspd video=camera0 audio=audio0.capture
+job status rtspd
+job stop rtspd
+```
+
+Defaults are `video=camera0 audio=none size=qvga fps=5 port=554`. `video=camera`
+is a compatibility alias for `camera0`. Video selects a typed JPEG frame source
+from `stream list`; opening it holds the same exclusive hardware lease as the camera
+service. At least one source must be enabled. `fps=` is a maximum video
+publication rate, not a
+capture timer; `fps=0` removes the cap. `size=` and `fps=` are invalid with
+`video=none`. JPEG quality is fixed at 12.
+
+Use `stream list` to find available video and audio source IDs. `audio0.capture`
+is the board codec's PCM microphone endpoint when available; `mic0` is a scalar
+level sensor, not a PCM source. Audio must be a source or
+duplex S16LE PCM endpoint with 16-bit samples, 1..8 channels, and a native rate
+of 8000..192000 Hz. The job advertises the source's native rate and channels;
+it does not resample. Only selected hardware is leased as `job:rtspd`.
+Tab completion after `job start rtspd` offers unused option keys. After `audio=`
+or `video=`, double Tab lists compatible registered source IDs and `none`;
+partial IDs complete normally. Selection does not open or lease the source.
+Audio-only publishing requires neither a camera nor the camera package.
+For playback on another SolarOS device, use JPEG video and L16 audio at
+8000..48000 Hz with one or two channels. A 16000 Hz mono source is the
+recommended low-bandwidth audio format; native 16000 Hz stereo capture also
+works. The publisher's wider native-format support does not imply that every
+receiver supports those formats, and selecting a source never resamples it.
+External publishers should use baseline JPEG with both quantization tables;
+160x120 at 10 fps is a useful initial ESP32 receiver workload. RTP packets must
+fit the path MTU; SolarOS publishes packets of at most 1200 bytes.
+Selecting an absent, busy, sink-only, or incompatible source fails startup;
+there is no silent fallback to another source.
+
+Reader workers block on camera/audio availability and immediately publish or
+discard the completed frame/block. They continuously drain idle sources, so
+connecting does not expose a stale camera image or audio backlog. The video
+cap drops newly captured images rather than holding them until a timer expires.
+There is one leased PSRAM camera framebuffer, no JPEG copy or video queue,
+and at most one MTU-sized PCM block. Disabled sources allocate no reader stack.
+Temporary UDP transmit pressure drops the current frame/block and newly
+captured data during a short backoff instead of disconnecting or building a
+queue. Audio sample timestamps advance across dropped blocks. Status reports
+congestion drops and the last transmit errno separately from fatal send errors.
+Each enabled source uses an additional 4096-byte internal worker stack, shown
+by `job status rtspd`, and is closed by its owning reader during cancellation.
+Source stack minimum-free values are reported in bytes, including microphone
+startup and publishing. Packet scratch and RTSP session storage are allocated
+only when the job starts, using the PSRAM-preferred memory policy; disabled
+sources allocate no scratch. Audio scratch is one 1188-byte PCM block plus
+one 1200-byte RTP packet, off the reader's stack. I2S DMA buffers and task
+stacks remain internal. Runtime buffers are freed after workers and leases
+have closed, including failed startup; a pending stop retains them safely.
+An unused/stopped job reserves no session or media buffers, only its small
+internal control state and lock. `job status rtspd` reports runtime buffer sizes.
+
+Open the single RTSP client session:
+
+```text
+vlc rtsp://device/media
+rtsp rtsp://device/media
+ffplay -rtsp_transport udp -fflags nobuffer -probesize 32 -analyzeduration 1 -max_delay 100000 rtsp://device/media
+```
+
+FFplay's default probing/playback buffers can add seconds of latency; the
+example reduces client-side probing and UDP reordering delay. It does not
+guarantee a particular glass-to-glass latency. Capture timestamps determine
+video RTP timing; audio timestamps advance by sample frames. Images and audio
+blocks predating each `PLAY` are discarded.
+
+The camera lease excludes `cam-webd`, shell camera capture, and other camera
+owners only when a camera source is selected. Each packet is at most 1200 bytes.
+Unsupported JPEG modes are counted and dropped, not sent using private payloads.
+Transport is UDP; RTSP-over-TCP interleaving is unsupported. VLC requires a
+build with Live555: if its log reports `satip` or `access_realrtsp` failures,
+check for `--disable-live555` and use FFplay or a compatible VLC build.
+
+The stream is unauthenticated and unencrypted; use it only on a trusted LAN
+or protected network path.
 
 ## displayd
 
@@ -817,13 +959,50 @@ The job requires PSRAM and a packet-radio expansion capability. It claims the
 radio, applies the explicit regional profile, sends one zero-hop startup
 advert, and continuously handles adverts, direct messages, ACKs, and group
 messages. Its complete protocol context is allocated as external-required
-PSRAM; the 6144-byte worker stack remains internal and its minimum watermark is
+PSRAM; the 7168-byte worker stack remains internal and its minimum watermark is
 reported by `meshcore status`.
 
 Stopping restores the previous radio configuration and state before releasing
 ownership. MeshCore and `radio-link` therefore report normal ownership
 conflicts when pointed at the same radio. See [meshcore.md](meshcore.md) for
 identity, trust, channel, regional-profile, and security details.
+
+## meshcore-ble
+
+MeshCore companion-protocol client for a separate BLE radio device. The job
+connects to one explicit peer, synchronizes its contacts and channels, drains
+queued messages, and carries Chat messages through the standard MeshCore
+messaging provider.
+
+Usage:
+
+```text
+job start meshcore-ble <address> <public|random|rpa_public|rpa_random> [six-digit-pin]
+job status meshcore-ble
+job stop meshcore-ble
+```
+
+Example:
+
+```text
+job start meshcore-ble 68:ee:8f:69:5f:35 public 123456
+contacts
+chat
+```
+
+The job requires BLE and PSRAM. The optional PIN requests Secure Connections
+pairing; inspect `job status meshcore-ble` and confirm `encrypted=yes` and
+`bonded=yes`. The PIN is retained only while the job runs, but the start command
+can remain in shell history. The worker reconnects with exponential backoff and
+coexists with the BLE keyboard; a concurrent keyboard connection attempt can
+delay a reconnect but does not tear down either established link.
+
+`meshcore` and `meshcore-ble` are alternative transports for the same messaging
+provider and cannot run at the same time. Contacts, direct conversations, Chat,
+and Inbox remain provider-neutral. Channels and the external device's radio and
+identity are configured on the companion device; the `meshcore` shell command
+continues to configure only SolarOS's local packet-radio implementation. See
+[meshcore.md](meshcore.md) for transport and security details.
 
 ## espnow-link
 
@@ -918,10 +1097,82 @@ job started. Mutating direct radio operations are rejected while the radio is
 owned by the job. See [link.md](link.md) for commands, frame layout, IDs,
 queue limits, transport MTUs, and version-one exclusions.
 
+## pppd
+
+PPP over any bidirectional SolarOS byte-stream port. A physical UART, USB CDC,
+or a virtual port carried by a packet-radio link can provide the bytes; the PPP
+negotiation mode and the interface's routing role are configured separately.
+
+Usage:
+
+```text
+job start pppd <port> [baud|baud=rate]
+    [role=downstream|uplink|peer] [mode=passive|active]
+    [local=address] [peer=address] [dns=auto|none|address]
+    [priority=0..255]
+job stop pppd
+job status pppd
+```
+
+Defaults:
+
+| Setting | Value |
+| --- | --- |
+| Baud | Keep the port's current rate |
+| Role | `downstream` |
+| Mode | `passive` for downstream; `active` otherwise |
+| Local address | `192.168.8.1` for downstream |
+| Peer address | `192.168.8.2` for downstream |
+| DNS | `auto`, copied from the preferred SolarOS uplink |
+| Uplink priority | `90` |
+
+Routing roles have these effects:
+
+- `downstream` enables NAPT on the PPP interface. A connected computer can use
+  whichever Wi-Fi, cellular, or WireGuard routes SolarOS currently selects.
+- `uplink` registers `ppp-<port>` as a base network path. It participates in
+  the same persistent priority selection as Wi-Fi and cellular interfaces.
+- `peer` creates only the point-to-point interface. It does not enable NAPT or
+  advertise the interface as a default-route candidate.
+
+`mode=active` starts negotiation. `mode=passive` listens for the other endpoint
+to initiate it. Either mode can be combined with any routing role; the defaults
+are conveniences, not a coupling between negotiation and routing.
+
+Examples:
+
+```text
+# Retro computer dials into SolarOS and reaches its selected Internet route.
+job start pppd uart0 baud=115200
+
+# The same downstream service over native USB CDC with an explicit DNS server.
+job start pppd cdc0 role=downstream dns=8.8.8.8
+
+# Treat a virtual serial port over a radio link as a SolarOS uplink.
+job start pppd vser0 role=uplink mode=active priority=120
+
+# A routed point-to-point link without address translation.
+job start pppd uart0 38400 role=peer mode=passive \
+    local=10.20.0.1 peer=10.20.0.2 dns=none
+```
+
+The job exclusively claims the selected port. A baud argument is accepted only
+for configurable UART ports; CDC and virtual ports retain their transport rate.
+This initial service uses unauthenticated PPP. Use it on a physically trusted
+link. `job status pppd` reports negotiation state, assigned addresses, NAPT,
+traffic counters, reconnects, and the most recent PPP error.
+While the job runs, `network` and `network status` show `ppp-<port>` with its
+uplink, downstream, or peer role. Only the uplink role appears in the Network
+Settings priority list.
+
 ## slip
 
 IPv4 SLIP gateway on a byte-stream port. This is intended for retro machines,
 headless boards, and serial networking experiments.
+The active interface is named with the `slip-` prefix plus the selected port,
+for example `slip-uart0`. It appears as a downstream NAT link in the Network
+views; its traffic follows the selected SolarOS route, which can be Wi-Fi,
+cellular, or WireGuard.
 
 Usage:
 
@@ -956,6 +1207,99 @@ Notes:
 - The selected port is claimed by the SLIP job until it stops.
 - `cdc0` is useful for Linux host testing; `uart0` is the natural expansion
   port path.
+
+## graffiti
+
+Full-screen Palm Graffiti handwriting input for boards with absolute touch and
+PSRAM. The job does not draw an overlay or change the active application.
+
+```text
+job start graffiti
+job status graffiti
+job stop graffiti
+```
+
+The pen-down position chooses the recognition alphabet for the complete
+stroke. Start in the left two-thirds of the oriented display for letters, or
+in the right one-third for numbers. The boundary follows the current display
+orientation. Relative pointer sources are ignored.
+
+The recognizer implements the `$1` unistroke pipeline with Palm Graffiti 1
+alphabet and numeral templates. It preserves stroke direction so a downward
+vertical stroke can be `I` or `1`, while an upward vertical stroke is Shift.
+The Palm editing gestures are also available:
+
+| Stroke | Result |
+| --- | --- |
+| Upward vertical | Shift; repeat before a character for Caps Lock. |
+| Left to right | Space. |
+| Right to left | Backspace. |
+| Upper right to lower left | Enter. |
+
+While running, the job registers the `pointer-observer` resource. It observes
+absolute pointer events over the whole display but does not consume them, so
+the foreground application continues to receive the same press, move, and
+release events. Recognized characters are published by a virtual keyboard
+source named `graffiti` and therefore go to the current input focus. `job
+status graffiti` reports recognized, rejected, and dropped stroke counts plus
+the current case state.
+
+## pointer-arrows
+
+Consume one named pointer source and hold arrow keys while it moves:
+
+```sh
+job start pointer-arrows source=trackball0
+job status pointer-arrows
+job stop pointer-arrows
+```
+
+Set `min-vector=1..65535` to require a minimum net vector length in each
+evaluation window. The default is `2`; larger values reduce sensitivity.
+For example, restart T-Deck navigation with:
+
+```sh
+job stop pointer-arrows
+job start pointer-arrows source=trackball0 min-vector=4
+```
+
+Length is `sqrt(dx*dx + dy*dy)` in the source's movement units. For `trackball0`,
+one interrupt edge contributes one unit on its axis. Movement below the minimum
+releases a held arrow and is discarded at the end of the window; it does not
+accumulate across windows. The option also applies to the last partial window
+when movement stops or a touch is released.
+
+The job exclusively captures that source's pointer events, including contact
+and button boundaries. They are withheld from foreground pointer consumers and
+the pointer filter while the job runs. Other pointer sources remain available.
+Pointer buttons do not produce keyboard keys. Release any held button or touch
+before starting the job.
+
+Movement is evaluated in fixed 80 ms windows, starting with the first movement
+event. Each window that meets the minimum selects the dominant net direction
+and presses that arrow. Continued movement in the same direction keeps the key
+held, using the normal `setterm keyrate` repeat settings. A direction or modifier
+change releases the old key before pressing the new one. Opposite movement
+cancels within a window;
+equal diagonals use the most recently moved axis. A zero net vector releases
+the arrow. Trackball windows retain the modifiers from their last interrupt
+edge. Other pointer sources use keyboard modifiers when samples are processed.
+
+After 80 ms without a movement event, the held key is released. A short roll
+that meets the minimum produces a press and release. Touch release ends an
+absolute-pointer gesture immediately. Stopping the job, source loss, or a
+capture reset also releases held keys and cancels repeat.
+
+Relative pointers supply deltas directly. Absolute pointers are measured from
+each contact's initial position; a new contact starts a new baseline. Only one
+contact is tracked at a time. Job status reports the captured source, minimum
+vector length, direction evaluations that meet it, capture resets, and
+evaluation and inactivity intervals.
+
+Stopping releases capture and discards unevaluated movement. If stopped during a
+held button or contact, pointer delivery resumes after its release. Source
+closure or loss of readiness stops the job and releases its resources. T-Deck
+starts this job for `trackball0` before the shell and startup script run.
 
 ## gpio-keys
 
@@ -1088,6 +1432,66 @@ waiting until the running MIDI job receives its first matching value.
 Use a compliant electrical interface: MIDI IN requires an optoisolated
 receiver and MIDI OUT requires a current-limited driver. Do not connect DIN
 MIDI pins directly to ESP32 GPIOs.
+
+## speechd
+
+Offline text-to-speech queue. The optional job loads a PicoTTS voice from
+storage into PSRAM and accepts asynchronous requests from native applications,
+Python, and Lua.
+
+```text
+job start speechd /voices/en-US
+say "Solar O S is ready"
+say --pitch 85 --speed 120 "Solar O S is ready"
+say --file /documents/announcement.txt
+say --file /books/novel.txt
+job status speechd
+job stop speechd
+```
+
+`say --file <path>` validates and reads a plain UTF-8 text file in bounded
+chunks. It keeps the shell in a foreground playback mode, but advances from
+shell events so the display and progress bar refresh while speech is running.
+The percentage is submitted-file progress: it advances whenever the next
+bounded chunk is accepted by `speechd`. The complete file is one streaming
+speech request: PicoTTS and the audio player stay open between chunks, while a
+single bounded handoff slot prevents the file from being buffered in memory.
+Press `Esc` or `Ctrl+C` to cancel the current speech request and stop reading.
+The foreground command returns only after `speechd` confirms cancellation, so a
+new `say` request cannot race the previous stream's cleanup. Cancellation
+discards queued text and soft-resets PicoTTS instead of synthesizing the
+unspoken remainder of the file.
+There is no file-size limit because only one bounded chunk is held and submitted
+at a time. Tab completion after `--file` lists filesystem paths. Ordinary `say
+<text...>` remains asynchronous and returns the queued request ID.
+`--pitch 50..200` and `--speed 20..500` use PicoTTS's native controls; both
+default to 100 and apply to ordinary text and file playback.
+
+The voice directory must contain `ta.bin` and `sg.bin`. No voice blobs are
+compiled into `firmware.bin`. The repository's top-level `picotts_voices/`
+directory contains ready-to-copy voices for `en-GB`, `en-US`, `de-DE`, `es-ES`,
+`fr-FR`, and `it-IT`. Builds also mirror them below
+`.pio/build/<environment>/picotts_voices/`. Copy one or more complete locale
+directories to SD or flash storage, then select the language when starting the
+job:
+
+```text
+job start speechd /voices/de-DE
+```
+
+Restarting `speechd` with another directory changes the language at runtime.
+The directory name is used as the voice label in `job status speechd`; PicoTTS
+validates the TA and SG resource contents while starting. Missing, truncated,
+or incompatible resources make the job fail instead of accepting requests.
+
+The job acquires the selected audio output only while an utterance is active
+and releases it between requests. Normal requests wait for another audio owner;
+callers can mark disposable notifications `drop_if_busy`.
+
+The queue holds eight requests of at most 512 UTF-8 bytes. Request IDs support
+polling and cancellation through `solaros.speech`. Stopping the job cancels
+pending speech and releases the roughly 1.1 MiB PicoTTS engine allocation plus
+the selected TA and SG buffers.
 
 ## sump
 

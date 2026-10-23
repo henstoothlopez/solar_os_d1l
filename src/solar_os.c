@@ -12,6 +12,8 @@
 #include "solar_os_memory.h"
 #include "solar_os_splash.h"
 #include "solar_os_shell_io.h"
+#include "apps/solar_os_shell.h"
+#include "solar_os_shutdown.h"
 
 static const char *TAG = "solar_os";
 
@@ -70,6 +72,10 @@ esp_err_t solar_os_app_start(const solar_os_app_t *app,
     if (app == NULL || ctx == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (solar_os_shutdown_requested() &&
+        (app->name == NULL || strcmp(app->name, "shell") != 0)) {
+        return app_start_failure(app, ctx, ESP_ERR_INVALID_STATE);
+    }
     if (app->app_class == SOLAR_OS_APP_CLASS_UNSPECIFIED) {
         SOLAR_OS_LOGE(TAG,
                       "%s has no foreground app class",
@@ -77,6 +83,7 @@ esp_err_t solar_os_app_start(const solar_os_app_t *app,
         return app_start_failure(app, ctx, ESP_ERR_INVALID_STATE);
     }
     solar_os_context_set_app_class(ctx, app->app_class);
+    ctx->app = app;
     if ((app->state_size == 0U) != (app->state_slot == NULL) ||
         (app->state_size > 0U &&
          app->state_storage == SOLAR_OS_APP_STATE_NONE) ||
@@ -113,18 +120,26 @@ esp_err_t solar_os_app_start(const solar_os_app_t *app,
     return err;
 }
 
-void solar_os_app_stop(const solar_os_app_t *app, solar_os_context_t *ctx)
+bool solar_os_app_stop_checked(const solar_os_app_t *app, solar_os_context_t *ctx)
 {
     if (app == NULL) {
-        return;
+        return true;
     }
+    if (ctx != NULL) ctx->app = app;
     if (app->stop != NULL) {
         app->stop(ctx);
     }
     if (!app_release_state(app)) {
         SOLAR_OS_LOGW(TAG, "%s retained cold state while worker stops",
                       app->name != NULL ? app->name : "?");
+        return false;
     }
+    return true;
+}
+
+void solar_os_app_stop(const solar_os_app_t *app, solar_os_context_t *ctx)
+{
+    (void)solar_os_app_stop_checked(app, ctx);
 }
 
 void solar_os_context_init(solar_os_context_t *ctx,
@@ -147,6 +162,7 @@ void solar_os_context_init(solar_os_context_t *ctx,
     ctx->exit_result_pending = false;
     ctx->exit_code = 0;
     ctx->sleep_requested = false;
+    ctx->deep_sleep_requested = false;
     ctx->suspend_requested = false;
     ctx->session_request = SOLAR_OS_SESSION_REQUEST_NONE;
     ctx->session_request_id = 0;
@@ -158,6 +174,8 @@ void solar_os_context_init(solar_os_context_t *ctx,
     ctx->status_message[0] = '\0';
     ctx->app_class = SOLAR_OS_APP_CLASS_UNSPECIFIED;
     ctx->argc = 0;
+    ctx->launch_cwd[0] = '\0';
+    ctx->app = NULL;
     memset(ctx->argv, 0, sizeof(ctx->argv));
 }
 
@@ -389,11 +407,18 @@ esp_err_t solar_os_context_request_launch_ex(solar_os_context_t *ctx,
         }
     }
 
+    char launch_cwd[sizeof(ctx->launch_cwd)] = {0};
+    if (ctx->shell_session != NULL) {
+        const esp_err_t error = solar_os_shell_resolve_path(ctx, NULL, launch_cwd, sizeof(launch_cwd));
+        if (error != ESP_OK) return error;
+    }
+
     memset(ctx->argv, 0, sizeof(ctx->argv));
     for (int i = 0; i < argc; i++) {
         strlcpy(ctx->argv[i], argv[i], sizeof(ctx->argv[i]));
     }
     ctx->argc = argc;
+    memcpy(ctx->launch_cwd, launch_cwd, sizeof(ctx->launch_cwd));
     ctx->requested_app = app;
     ctx->launch_policy = policy;
     ctx->exit_requested = false;
@@ -403,6 +428,7 @@ esp_err_t solar_os_context_request_launch_ex(solar_os_context_t *ctx,
     ctx->status_message_pending = false;
     ctx->status_message[0] = '\0';
     ctx->sleep_requested = false;
+    ctx->deep_sleep_requested = false;
     ctx->suspend_requested = false;
     ctx->graphics_active = false;
     return ESP_OK;
@@ -487,6 +513,23 @@ bool solar_os_context_take_sleep_request(solar_os_context_t *ctx)
     }
 
     ctx->sleep_requested = false;
+    return true;
+}
+
+void solar_os_context_request_deep_sleep(solar_os_context_t *ctx)
+{
+    if (ctx != NULL) {
+        ctx->deep_sleep_requested = true;
+    }
+}
+
+bool solar_os_context_take_deep_sleep_request(solar_os_context_t *ctx)
+{
+    if (ctx == NULL || !ctx->deep_sleep_requested) {
+        return false;
+    }
+
+    ctx->deep_sleep_requested = false;
     return true;
 }
 

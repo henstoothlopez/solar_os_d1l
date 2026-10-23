@@ -6,6 +6,7 @@
 
 #include "esp_err.h"
 #include "solar_os_display_surface.h"
+#include "solar_os_display_maintenance.h"
 #include "solar_os_gfx.h"
 #include "solar_os_terminal.h"
 #include "u8g2.h"
@@ -30,6 +31,11 @@ typedef esp_err_t (*solar_os_display_frame_presenter_t)(
 #define SOLAR_OS_DISPLAY_TARGET_OWNER_MAX 32
 #define SOLAR_OS_DISPLAY_PRIMARY_TARGET "display0"
 
+/* Only a display declared by the board profile belongs to the board-primary
+ * path. A runtime display named display0 on a headless board remains a normal
+ * display target so sessions and applications can discover it. */
+bool solar_os_display_target_is_board_primary(const char *name);
+
 typedef struct {
     char name[SOLAR_OS_DISPLAY_TARGET_NAME_MAX];
     char source[SOLAR_OS_DISPLAY_TARGET_SOURCE_MAX];
@@ -45,6 +51,9 @@ typedef struct {
     uint32_t surface_formats;
     uint32_t frame_formats;
     uint16_t preferred_stream_fps;
+    /* Minimum caller task stack for synchronous presentation, bytes; 0 uses
+     * the presenter's default. Protocol-backed targets may nest substantial I/O. */
+    uint16_t presentation_stack_bytes;
     uint32_t max_stream_pixels_per_second;
     u8g2_t *u8g2;
     const u8g2_cb_t *base_rotation;
@@ -56,7 +65,25 @@ typedef struct {
     solar_os_display_surface_presenter_t present_surface;
     void *frame_context;
     solar_os_display_frame_presenter_t present_frame;
+    esp_err_t (*present_power_state)(void *context);
+    void *power_state_context;
+    esp_err_t (*relax)(void *context, solar_os_display_relax_phase_t phase);
+    void *relax_context;
 } solar_os_display_target_t;
+
+typedef struct {
+    uint32_t cycles;
+    bool cancelled;
+} solar_os_display_relax_result_t;
+
+/* Exclusive, synchronous native black/white cycles under the caller's claim.
+ * Cancellation is polled between hardware refreshes and during holds. END is
+ * always attempted after a successful BEGIN, including after a frame error.
+ */
+esp_err_t solar_os_display_relax(const char *name, const char *owner, unsigned seconds,
+                                 bool (*should_cancel)(void *), void *user,
+                                 solar_os_display_relax_result_t *result,
+                                 char *busy_owner, size_t busy_owner_len);
 
 typedef enum {
     SOLAR_OS_DISPLAY_PRESENT_TEXT,
@@ -81,6 +108,9 @@ typedef struct {
 esp_err_t solar_os_display_init(solar_os_board_display_t *display);
 esp_err_t solar_os_display_register_target(const solar_os_display_target_t *target);
 esp_err_t solar_os_display_unregister_target(const char *name);
+/* Atomically removes all named targets, or none when any target is busy. */
+esp_err_t solar_os_display_unregister_targets(const char *const *names,
+                                              size_t count);
 size_t solar_os_display_target_count(void);
 bool solar_os_display_get_target(size_t index, solar_os_display_target_t *target);
 bool solar_os_display_find_target(const char *name, solar_os_display_target_t *target);
@@ -112,6 +142,9 @@ esp_err_t solar_os_display_get_colors(uint32_t *foreground_rgb888,
 esp_err_t solar_os_display_set_foreground_color(uint32_t rgb888);
 esp_err_t solar_os_display_set_background_color(uint32_t rgb888);
 esp_err_t solar_os_display_suspend_primary(void);
+esp_err_t solar_os_display_show_power_state(const char *status);
+void solar_os_display_clear_power_state(void);
+esp_err_t solar_os_display_shutdown(void);
 esp_err_t solar_os_display_resume_primary(void);
 bool solar_os_display_primary_suspended(void);
 esp_err_t solar_os_display_set_palette_inverted(const char *name, bool inverted);

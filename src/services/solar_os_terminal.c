@@ -56,6 +56,17 @@ static const terminal_font_family_t terminal_font_families[] = {
 };
 
 static const terminal_text_size_profile_t terminal_text_sizes[SOLAR_OS_TERMINAL_TEXT_SIZE_COUNT] = {
+    [SOLAR_OS_TERMINAL_TEXT_SIZE_8] = {
+        .name = "8",
+        .regular_font = {
+            [SOLAR_OS_TERMINAL_FONT_MONO] = u8g2_font_5x8_tf,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = u8g2_font_5x8_tf,
+        },
+        .cell_width = {
+            [SOLAR_OS_TERMINAL_FONT_MONO] = 6,
+            [SOLAR_OS_TERMINAL_FONT_COMPACT] = 6,
+        },
+    },
     [SOLAR_OS_TERMINAL_TEXT_SIZE_10] = {
         .name = "10",
         .regular_font = {
@@ -559,11 +570,12 @@ static void terminal_apply_settings(solar_os_terminal_t *terminal, bool clear_sc
 
     const int footer_height = terminal->footer_enabled ? line_height : 0;
 
-    size_t cols = (size_t)((display_width - (TERM_MARGIN_X * 2)) / char_width);
-    if (cols < 1) {
+    size_t cols = solar_os_terminal_columns_compute(display_width,
+                                                    TERM_MARGIN_X,
+                                                    char_width,
+                                                    SOLAR_OS_TERMINAL_MAX_COLS);
+    if (cols == 0U) {
         cols = 1;
-    } else if (cols > SOLAR_OS_TERMINAL_MAX_COLS) {
-        cols = SOLAR_OS_TERMINAL_MAX_COLS;
     }
 
     solar_os_terminal_geometry_t geometry;
@@ -818,7 +830,7 @@ static void terminal_alloc_scrollback(solar_os_terminal_t *terminal)
 
     terminal->scrollback = solar_os_memory_calloc(SOLAR_OS_TERMINAL_SCROLLBACK_ROWS,
                                                   sizeof(terminal->scrollback[0]),
-                                                  SOLAR_OS_MEMORY_EXTERNAL_REQUIRED,
+                                                  SOLAR_OS_MEMORY_EXTERNAL_RESIDENT,
                                                   "terminal.text");
     terminal->scrollback_bold = solar_os_memory_calloc(SOLAR_OS_TERMINAL_SCROLLBACK_ROWS,
                                                        sizeof(terminal->scrollback_bold[0]),
@@ -894,6 +906,21 @@ void solar_os_terminal_init_with_rotation(solar_os_terminal_t *terminal,
     terminal_load_settings(terminal);
     terminal_apply_settings(terminal, false);
     terminal->dirty = true;
+}
+
+void solar_os_terminal_rebind_display(solar_os_terminal_t *terminal,
+                                      u8g2_t *u8g2,
+                                      const u8g2_cb_t *base_rotation)
+{
+    if (terminal == NULL || u8g2 == NULL || base_rotation == NULL) {
+        return;
+    }
+
+    terminal->u8g2 = u8g2;
+    terminal->base_rotation = base_rotation;
+    terminal->scrollback_offset = 0U;
+    terminal->render_valid = false;
+    terminal_apply_settings(terminal, false);
 }
 
 void solar_os_terminal_deinit(solar_os_terminal_t *terminal)
@@ -2108,9 +2135,12 @@ static void terminal_draw_cell(solar_os_terminal_t *terminal,
         (void)u8g2_DrawGlyph(u8g2, (u8g2_uint_t)x, (u8g2_uint_t)y, cell);
     }
     if (underline) {
+        int underline_y = y + 1;
+        const int cell_bottom = y - terminal->cell_ascent + terminal->line_height - 1;
+        if (underline_y > cell_bottom) underline_y = cell_bottom;
         u8g2_DrawHLine(u8g2,
                        (u8g2_uint_t)x,
-                       (u8g2_uint_t)(y + 1),
+                       (u8g2_uint_t)underline_y,
                        terminal->char_width);
     }
     terminal_set_draw_color(terminal, u8g2, 0);

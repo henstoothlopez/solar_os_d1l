@@ -12,7 +12,10 @@
 #define BLE_CONNECT_TIMEOUT_MS 12000U
 #define BLE_OPERATION_TIMEOUT_MS 5000U
 
-typedef enum { BLE_OP_NONE, BLE_OP_CONNECT, BLE_OP_READ, BLE_OP_WRITE, BLE_OP_SUBSCRIBE } ble_operation_t;
+typedef enum {
+    BLE_OP_NONE, BLE_OP_CONNECT, BLE_OP_READ, BLE_OP_WRITE, BLE_OP_SUBSCRIBE,
+    BLE_OP_PAIR
+} ble_operation_t;
 
 typedef struct ble_session {
     struct ble_session *next;
@@ -404,6 +407,224 @@ esp_err_t solar_os_ble_server_request(solar_os_ble_session_t session,
     if (result == ESP_OK) result = solar_os_ble_backend_server_request(session, request);
     unlock_dispatch();
     return result;
+}
+
+static esp_err_t ble_hid_request(solar_os_ble_session_t session,
+                                 solar_os_ble_hid_request_t *request)
+{
+    if (!request || request->op < SOLAR_OS_BLE_HID_OP_START ||
+        request->op > SOLAR_OS_BLE_HID_OP_DISCONNECT ||
+        !memchr(request->name, 0, sizeof(request->name))) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    lock_dispatch();
+    lock_state();
+    ble_session_t *s = live_locked(session);
+    const bool valid = s && !s->parent && !sleeping;
+    solar_os_ble_cancel_check_t check = valid ? s->cancel_check : NULL;
+    void *user = valid ? s->cancel_user : NULL;
+    unlock_state();
+    esp_err_t result = valid ? ESP_OK : ESP_ERR_INVALID_STATE;
+    if (result == ESP_OK && check && check(user)) {
+        result = SOLAR_OS_BLE_ERR_CANCELLED;
+    }
+    if (result == ESP_OK && request->op == SOLAR_OS_BLE_HID_OP_START) {
+        result = solar_os_ble_backend_init();
+    }
+    if (result == ESP_OK) {
+        result = solar_os_ble_backend_hid_request(session, request);
+    }
+    unlock_dispatch();
+    return result;
+}
+
+esp_err_t solar_os_ble_hid_device_start(solar_os_ble_session_t session,
+                                        const char *name)
+{
+    if (!name) return ESP_ERR_INVALID_ARG;
+    const size_t length = strlen(name);
+    if (!length || length > 26) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    solar_os_ble_hid_request_t request = {.op = SOLAR_OS_BLE_HID_OP_START};
+    memcpy(request.name, name, length + 1);
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_device_stop(solar_os_ble_session_t session)
+{
+    solar_os_ble_hid_request_t request = {.op = SOLAR_OS_BLE_HID_OP_STOP};
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_device_start_managed(solar_os_ble_session_t session,
+                                               const char *name)
+{
+    if (!name || !strlen(name) || strlen(name) > 26) return ESP_ERR_INVALID_ARG;
+    solar_os_ble_hid_request_t r = {.op=SOLAR_OS_BLE_HID_OP_START,.manual=true};
+    memcpy(r.name, name, strlen(name)+1);
+    return ble_hid_request(session, &r);
+}
+
+esp_err_t solar_os_ble_hid_device_hosts(solar_os_ble_session_t session,
+    solar_os_ble_hid_host_t *hosts, size_t capacity, size_t *count)
+{
+    if (!hosts || !count || !capacity) return ESP_ERR_INVALID_ARG;
+    *count = 0;
+    solar_os_ble_hid_request_t r = {.op=SOLAR_OS_BLE_HID_OP_HOSTS};
+    esp_err_t result = ble_hid_request(session, &r);
+    if (result != ESP_OK) return result;
+    *count = r.host_count < capacity ? r.host_count : capacity;
+    memcpy(hosts, r.hosts, *count * sizeof(*hosts));
+    return ESP_OK;
+}
+
+static esp_err_t ble_hid_host_request(solar_os_ble_session_t session,
+    solar_os_ble_hid_operation_t op, const uint8_t bda[6], uint8_t addr_type)
+{
+    if (!bda || addr_type > 1) return ESP_ERR_INVALID_ARG;
+    solar_os_ble_hid_request_t r = {.op=op,.addr_type=addr_type};
+    memcpy(r.bda, bda, sizeof(r.bda));
+    return ble_hid_request(session, &r);
+}
+
+esp_err_t solar_os_ble_hid_device_connect(solar_os_ble_session_t session,
+                                          const uint8_t bda[6], uint8_t addr_type)
+{ return ble_hid_host_request(session, SOLAR_OS_BLE_HID_OP_CONNECT, bda, addr_type); }
+esp_err_t solar_os_ble_hid_device_forget(solar_os_ble_session_t session,
+                                         const uint8_t bda[6], uint8_t addr_type)
+{ return ble_hid_host_request(session, SOLAR_OS_BLE_HID_OP_FORGET, bda, addr_type); }
+esp_err_t solar_os_ble_hid_device_disconnect(solar_os_ble_session_t session)
+{
+    solar_os_ble_hid_request_t r = {.op=SOLAR_OS_BLE_HID_OP_DISCONNECT};
+    return ble_hid_request(session, &r);
+}
+
+esp_err_t solar_os_ble_hid_device_pair(solar_os_ble_session_t session)
+{
+    solar_os_ble_hid_request_t request = {.op = SOLAR_OS_BLE_HID_OP_PAIR};
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_device_status(solar_os_ble_session_t session,
+                                         solar_os_ble_hid_info_t *info)
+{
+    if (!info) return ESP_ERR_INVALID_ARG;
+    solar_os_ble_hid_request_t request = {.op = SOLAR_OS_BLE_HID_OP_STATUS};
+    esp_err_t result = ble_hid_request(session, &request);
+    if (result == ESP_OK) *info = request.info;
+    return result;
+}
+
+esp_err_t solar_os_ble_hid_device_poll(solar_os_ble_session_t session,
+                                       solar_os_ble_hid_device_event_t *event)
+{
+    if (!event) return ESP_ERR_INVALID_ARG;
+    solar_os_ble_hid_request_t request = {.op = SOLAR_OS_BLE_HID_OP_POLL};
+    esp_err_t result = ble_hid_request(session, &request);
+    if (result == ESP_OK) *event = request.event;
+    return result;
+}
+
+static esp_err_t ble_hid_keyboard(solar_os_ble_session_t session,
+                                  solar_os_ble_hid_operation_t op,
+                                  const uint16_t *keys,
+                                  size_t key_count)
+{
+    if (!keys || !key_count || key_count > 8) return ESP_ERR_INVALID_ARG;
+    solar_os_ble_hid_request_t request = {.op = op, .key_count = key_count};
+    memcpy(request.keys, keys, key_count * sizeof(*keys));
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_keyboard_press(solar_os_ble_session_t session,
+                                          const uint16_t *keys,
+                                          size_t key_count)
+{
+    return ble_hid_keyboard(session, SOLAR_OS_BLE_HID_OP_KEYBOARD_PRESS,
+                            keys, key_count);
+}
+
+esp_err_t solar_os_ble_hid_keyboard_release(solar_os_ble_session_t session,
+                                            const uint16_t *keys,
+                                            size_t key_count)
+{
+    return ble_hid_keyboard(session, SOLAR_OS_BLE_HID_OP_KEYBOARD_RELEASE,
+                            keys, key_count);
+}
+
+esp_err_t solar_os_ble_hid_keyboard_release_all(solar_os_ble_session_t session)
+{
+    solar_os_ble_hid_request_t request = {
+        .op = SOLAR_OS_BLE_HID_OP_KEYBOARD_RELEASE_ALL,
+    };
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_mouse_move(solar_os_ble_session_t session,
+                                      int32_t x,
+                                      int32_t y)
+{
+    solar_os_ble_hid_request_t request = {
+        .op = SOLAR_OS_BLE_HID_OP_MOUSE_MOVE,
+        .x = x,
+        .y = y,
+    };
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_mouse_button(solar_os_ble_session_t session,
+                                        uint8_t button,
+                                        bool pressed)
+{
+    solar_os_ble_hid_request_t request = {
+        .op = SOLAR_OS_BLE_HID_OP_MOUSE_BUTTON,
+        .button = button,
+        .pressed = pressed,
+    };
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_gamepad_axis(solar_os_ble_session_t session,
+                                        int axis,
+                                        int16_t value)
+{
+    solar_os_ble_hid_request_t request = {
+        .op = SOLAR_OS_BLE_HID_OP_GAMEPAD_AXIS,
+        .axis = axis,
+        .value = value,
+    };
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_gamepad_button(solar_os_ble_session_t session,
+                                          uint8_t button,
+                                          bool pressed)
+{
+    solar_os_ble_hid_request_t request = {
+        .op = SOLAR_OS_BLE_HID_OP_GAMEPAD_BUTTON,
+        .button = button,
+        .pressed = pressed,
+    };
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_gamepad_hat(solar_os_ble_session_t session,
+                                       uint8_t hat)
+{
+    solar_os_ble_hid_request_t request = {
+        .op = SOLAR_OS_BLE_HID_OP_GAMEPAD_HAT,
+        .hat = hat,
+    };
+    return ble_hid_request(session, &request);
+}
+
+esp_err_t solar_os_ble_hid_gamepad_send(solar_os_ble_session_t session)
+{
+    solar_os_ble_hid_request_t request = {
+        .op = SOLAR_OS_BLE_HID_OP_GAMEPAD_SEND,
+    };
+    return ble_hid_request(session, &request);
 }
 
 esp_err_t solar_os_ble_session_get_info(solar_os_ble_session_t session,
@@ -799,6 +1020,24 @@ void solar_os_ble_service_event(const solar_os_ble_backend_event_t *event)
             finish_locked(s, event->result);
         }
         break;
+    case SOLAR_OS_BLE_BACKEND_PAIRED:
+        if (event->conn_id == s->link.info.conn_id) {
+            s->link.info.encrypted = event->encrypted;
+            s->link.info.bonded = event->bonded;
+            if (matched && s->op == BLE_OP_PAIR) {
+                if (event->result == ESP_OK) {
+                    strlcpy(s->link.info.status, "secured",
+                            sizeof(s->link.info.status));
+                } else {
+                    snprintf(s->link.info.status,
+                             sizeof(s->link.info.status),
+                             "pairing failed (backend=%u)",
+                             (unsigned)event->status);
+                }
+                finish_locked(s, event->result);
+            }
+        }
+        break;
     case SOLAR_OS_BLE_BACKEND_READ:
     case SOLAR_OS_BLE_BACKEND_WRITTEN:
         if (matched && event->conn_id == s->link.info.conn_id && s->handle == event->handle &&
@@ -954,6 +1193,42 @@ esp_err_t solar_os_ble_peer_disconnect(solar_os_ble_session_t session, solar_os_
     return owns_peer(session, peer) ? solar_os_ble_session_close(peer) : ESP_ERR_INVALID_STATE;
 }
 
+esp_err_t solar_os_ble_session_pair(solar_os_ble_session_t id,
+    uint32_t passkey, uint32_t timeout_ms)
+{
+    if (passkey > 999999U) return ESP_ERR_INVALID_ARG;
+    lock_dispatch();
+    lock_state();
+    ble_session_t *s = live_locked(id);
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    if (s && s->link.info.connected && !s->link.retiring) {
+        ret = begin_locked(s, BLE_OP_PAIR, 0);
+    }
+    if (ret != ESP_OK) {
+        unlock_state();
+        unlock_dispatch();
+        return ret;
+    }
+    const uint32_t epoch = s->link.epoch, request = s->request;
+    unlock_state();
+    ret = solar_os_ble_backend_pair(epoch, request, passkey);
+    if (ret != ESP_OK) {
+        lock_state();
+        if (s->pending) finish_locked(s, ret);
+        unlock_state();
+    }
+    unlock_dispatch();
+    return wait_operation(id, request,
+        timeout_ms ? timeout_ms : BLE_CONNECT_TIMEOUT_MS, NULL, 0, NULL);
+}
+
+esp_err_t solar_os_ble_peer_pair(solar_os_ble_session_t session,
+    solar_os_ble_peer_t peer, uint32_t passkey, uint32_t timeout_ms)
+{
+    return owns_peer(session, peer) ?
+        solar_os_ble_session_pair(peer, passkey, timeout_ms) : ESP_ERR_INVALID_STATE;
+}
+
 esp_err_t solar_os_ble_peer_get_info(solar_os_ble_session_t session, solar_os_ble_peer_t peer,
     solar_os_ble_session_info_t *info)
 {
@@ -1004,6 +1279,11 @@ static solar_os_ble_session_t compatibility_session(void)
 esp_err_t solar_os_ble_gatt_connect(const uint8_t bda[6], uint8_t addr_type, uint32_t timeout_ms)
 {
     return solar_os_ble_session_connect(compatibility_session(), bda, addr_type, timeout_ms);
+}
+
+esp_err_t solar_os_ble_gatt_pair(uint32_t passkey, uint32_t timeout_ms)
+{
+    return solar_os_ble_session_pair(compatibility_session(), passkey, timeout_ms);
 }
 
 esp_err_t solar_os_ble_gatt_disconnect(void)

@@ -7,15 +7,17 @@
 #include "esp_err.h"
 #include "solar_os_board_caps.h"
 #include "solar_os_expansion_types.h"
+#include "solar_os_stream.h"
 
-#define SOLAR_OS_EXPANSION_DRIVER_NAME_MAX 20
+#define SOLAR_OS_EXPANSION_DRIVER_NAME_MAX 32
 #define SOLAR_OS_EXPANSION_DEVICE_NAME_MAX 20
 #define SOLAR_OS_EXPANSION_ROLE_MAX 16
 #define SOLAR_OS_EXPANSION_TARGET_MAX 16
-#define SOLAR_OS_EXPANSION_DEVICE_BINDING_MAX 8
+#define SOLAR_OS_EXPANSION_DEVICE_BINDING_MAX 16
 
 typedef enum {
     SOLAR_OS_EXPANSION_BINDING_GPIO,
+    SOLAR_OS_EXPANSION_BINDING_GPIO_LINE,
     SOLAR_OS_EXPANSION_BINDING_ADC,
     SOLAR_OS_EXPANSION_BINDING_PWM,
     SOLAR_OS_EXPANSION_BINDING_I2S_PORT,
@@ -27,7 +29,11 @@ typedef enum {
     SOLAR_OS_EXPANSION_BINDING_PS2_BUS,
     SOLAR_OS_EXPANSION_BINDING_SCALAR_STREAM,
     SOLAR_OS_EXPANSION_BINDING_PARAMETER,
+    SOLAR_OS_EXPANSION_BINDING_BYTE_STREAM,
 } solar_os_expansion_binding_kind_t;
+
+bool solar_os_expansion_stream_binding_valid(solar_os_expansion_binding_kind_t,
+                                             const solar_os_stream_info_t *);
 
 typedef struct {
     solar_os_expansion_binding_kind_t kind;
@@ -93,6 +99,16 @@ typedef struct {
     bool allow_unlisted_bindings;
     solar_os_expansion_attach_fn_t attach;
     solar_os_expansion_detach_fn_t detach;
+    void *callback_user;
+    esp_err_t (*attach_with_user)(void *user,
+                                  const char *name,
+                                  const solar_os_expansion_binding_t *bindings,
+                                  size_t binding_count);
+    esp_err_t (*detach_with_user)(void *user, const char *name);
+    /* Optional cross-binding checks, shared by CLI, scripts and board defaults. */
+    esp_err_t (*validate_bindings)(const solar_os_expansion_binding_t *bindings,
+                                   size_t binding_count,
+                                   solar_os_expansion_binding_validation_t *validation);
 } solar_os_expansion_driver_t;
 
 typedef enum {
@@ -115,18 +131,28 @@ typedef struct {
 typedef struct {
     const char *driver;
     const char *name;
+    bool detachable;
     size_t binding_count;
     solar_os_expansion_binding_t bindings[SOLAR_OS_EXPANSION_DEVICE_BINDING_MAX];
 } solar_os_expansion_default_device_t;
 
 esp_err_t solar_os_expansion_init(void);
 esp_err_t solar_os_expansion_init_early(void);
+void solar_os_expansion_poll(uint32_t now_ms);
 bool solar_os_expansion_available(void);
 
 size_t solar_os_expansion_driver_count(void);
 bool solar_os_expansion_get_driver(size_t index, solar_os_expansion_driver_t *driver);
+esp_err_t solar_os_expansion_register_driver(
+    const solar_os_expansion_driver_t *driver);
+esp_err_t solar_os_expansion_unregister_driver(
+    const solar_os_expansion_driver_t *driver);
 bool solar_os_expansion_driver_supported(const char *name);
 const char *solar_os_expansion_category_name(solar_os_expansion_category_t category);
+bool solar_os_expansion_binding_pin_supported(
+    solar_os_expansion_binding_kind_t kind,
+    const char *target,
+    int pin);
 esp_err_t solar_os_expansion_validate_bindings(
     const char *driver,
     const solar_os_expansion_binding_t *bindings,
@@ -156,6 +182,8 @@ esp_err_t solar_os_expansion_attach(const char *driver,
                                     const char *name,
                                     const solar_os_expansion_binding_t *bindings,
                                     size_t binding_count);
+/* Restore a board device with its manifest bindings and board provenance. */
+esp_err_t solar_os_expansion_attach_board_device(const char *name);
 esp_err_t solar_os_expansion_detach(const char *name);
 esp_err_t solar_os_expansion_device_set_ready(const char *name, bool ready);
 size_t solar_os_expansion_device_count(void);

@@ -2,8 +2,8 @@
 id = "python.network"
 title = "Python networking API"
 section = "api"
-summary = "Networking: wifi, mqtt, http, net, ftp, ssh_keys"
-keywords = "python solaros api network wifi mqtt http net ftp ssh_keys"
+summary = "Networking: wifi, mqtt, http, net, ftp, sftpsync, ssh_keys"
+keywords = "python solaros api network wifi mqtt http net ftp sftpsync ssh_keys"
 packages_any = ["app_python"]
 agent_reference_sections = true
 +++
@@ -13,7 +13,7 @@ agent_reference_sections = true
 
 ## `solaros.wifi`
 
-Wi-Fi functions expose station, SoftAP, scan, NAT, and L2 IPv4 repeater controls.
+Wi-Fi functions expose station, SoftAP, scan, low-level NAT, and L2 IPv4 repeater controls.
 
 - `status()`: return detailed Wi-Fi status.
 - `status_text()`: return the same compact status text used by the shell.
@@ -29,7 +29,7 @@ Wi-Fi functions expose station, SoftAP, scan, NAT, and L2 IPv4 repeater controls
 - `scan()`: return visible APs as dictionaries with `ssid`, `auth`, `rssi`, `channel`, and `hidden`.
 - `ap_start([ssid[, password[, auth]]])`: start SoftAP, reusing saved AP config when no arguments are supplied.
 - `ap_stop()`: stop SoftAP.
-- `nat(enabled)`: persistently enable or disable APSTA NAT.
+- `nat(enabled)`: advanced control for NAT on the SoftAP interface. Prefer `solaros.net.router_start()` and `router_stop()`.
 - `repeater_start()`: connect the preferred remembered upstream when needed, repeat its saved SSID and password, and bridge upstream DHCP plus IPv4/ARP traffic without NAT.
 - `repeater_stop()`: stop L2 forwarding and the SoftAP while retaining the upstream station.
 
@@ -44,6 +44,14 @@ print(solaros.wifi.status())
 for ap in solaros.wifi.scan():
     print(ap["rssi"], ap["auth"], ap["ssid"])
 ```
+
+## `solaros.net`
+
+- `router_start()`: start the saved downstream Wi-Fi AP and route its clients through the SolarOS route table using IPv4 NAT.
+- `router_stop()`: disable router mode and stop the downstream AP.
+- `ping(host[, count[, timeout_ms[, interval_ms[, data_size]]]])`: send bounded ICMP echo requests.
+
+The remaining `solaros.net` functions provide bounded TCP, UDP, and WebSocket handles.
 
 ## `solaros.mqtt`
 
@@ -138,10 +146,11 @@ next ordered event dictionary:
   duration, cancellation/deadline flags, and ESP error details
 
 Each runtime can open two streams, with four streams globally. Each stream has
-an eight-event queue. If a script does not drain it, SolarOS terminates the
-stream with `ESP_ERR_NO_MEM`; it never silently drops body bytes. Handles close
-automatically at interpreter teardown. Always close them explicitly in
-`finally` so a completed stream releases its queue and handle immediately.
+an eight-event queue. A full queue backpressures the native worker until the
+script drains it or cancels the stream; SolarOS never silently drops body
+bytes. Handles close automatically at interpreter teardown. Always close them
+explicitly in `finally` so a completed stream releases its queue and handle
+immediately.
 
 The data boundary is a transport chunk, not an application record. For SSE,
 retain an incomplete line across `data` events and dispatch a message only at
@@ -298,6 +307,30 @@ for item in solaros.ftp.list("fileserver", "/incoming"):
 solaros.ftp.upload("fileserver", "/notes/todo.txt", "/incoming/todo.txt")
 ```
 
+## `solaros.sftpsync`
+
+`sync(source, destination[, recursive[, dry_run[, port[, password]]]])`
+synchronizes one local path with one `[user@]host:path` endpoint through SFTP.
+The direction follows the operand order. Local paths use the SolarOS storage
+resolver. The username defaults to the SolarOS identity, the port defaults to
+`22`, and an empty password allows SSH key authentication.
+
+The call blocks while it transfers, but remains cancellation-aware. It skips
+regular files whose size and modification time match, never deletes
+destination-only files, and limits recursive traversal to eight directory
+levels. Set `recursive=True` for directories or `dry_run=True` to report what
+would change. The returned dictionary contains `files_changed`,
+`bytes_transferred`, and `dry_run`; failures raise `OSError`.
+
+```python
+import solaros
+
+result = solaros.sftpsync.sync(
+    "/notes", "backup@example.com:/srv/terminal/notes", True
+)
+print(result["files_changed"], result["bytes_transferred"])
+```
+
 ## `solaros.ssh_keys`
 
 SSH key functions manage the default SolarOS SSH key pair.
@@ -323,5 +356,5 @@ print(solaros.ssh_keys.public_key())
 
 ## Quick reference
 
-Use `solaros.wifi`, `solaros.mqtt`, `solaros.http`, `solaros.net`, `solaros.ftp`, `solaros.ssh_keys` for networking.
+Use `solaros.wifi`, `solaros.mqtt`, `solaros.http`, `solaros.net`, `solaros.ftp`, `solaros.sftpsync`, `solaros.ssh_keys` for networking.
 See `man python` for runtime conventions and service availability.

@@ -4,7 +4,7 @@ title = "Audio, input, and clipboard APIs"
 section = "hardware"
 summary = "Use installed media and generic input services"
 aliases = ["audio", "ble", "clipboard", "pointer", "mouse", "touch", "joystick"]
-keywords = "python lua audio speaker microphone wav tone ble bluetooth keyboard pointer mouse touch joystick calibration clipboard"
+keywords = "python lua audio speaker microphone wav tone ble bluetooth keyboard pointer mouse touch joystick gesture calibration clipboard"
 packages_any = []
 +++
 # Audio, input, and clipboard APIs
@@ -15,18 +15,20 @@ operation.
 
 ## Keyboard input
 
-Local hardware input uses structured press, release, and repeat events. The
-input service tracks held keys by source and stable physical identity, while
-legacy shell and text applications continue to receive translated characters.
-BLE, PS/2, CardKB, and the integrated CL-32 keyboard, fixed board buttons,
-`gpio-keys`, and ADC D-pads share one repeat policy. Configure it with
-`setterm keyrate`; the setting applies even on a build without BLE. Analog
-joysticks are different: they publish normalized axes and never synthesize key
-events.
+BLE, PS/2, CardKB, integrated keyboards, board buttons, `gpio-keys`, and ADC
+D-pads feed the same input service. Use `setterm keyboard us` or `de` to choose
+a text layout, and `setterm keyrate` to set key repeat. Analog joysticks report
+axes; they do not generate arrow keys.
 
-Keyboard transports can additionally supply a canonical USB HID usage and
-modifier mask. This keeps physical controls independent of the selected text
-layout and lets BLE and PS/2 share the same US or German keymap.
+On a board with absolute touch and PSRAM, `job start graffiti` turns the whole
+display into a Palm Graffiti handwriting keyboard without drawing an overlay.
+The stroke's initial X coordinate selects its alphabet: the left two-thirds is
+letters and the right one-third is numbers. The selection does not change
+while the stroke is in progress. Recognized strokes enter the normal keyboard
+queue, so they follow the current input focus. The job observes absolute touch
+without consuming it; foreground applications still receive the pointer
+events. See
+[jobs.reference.md](jobs.reference.md#graffiti) for controls and ownership.
 
 `input test <source>` counters are cumulative from the time that source
 attached. Each accepted key press, release, or repeat increments `key`; it is
@@ -34,8 +36,7 @@ not a count of currently held keys. Character-only devices such as CardKB emit
 one press and one release per character, so one tap normally adds two events.
 Their last event has `physical=0` and `usage=0`; `key=10` is newline/Enter.
 
-CL-32 `core0` polls the integrated AVR event FIFO every 10 ms and registers
-`keyboard0`. It preserves press and release transitions. Shift and Fn cycle
+On CL-32, Shift and Fn cycle
 through one-shot, locked, and off states. File is left Alt, Menu is left Ctrl,
 OK is Enter, Cancel is Escape, and Fn with keypad 1 through 0 produces F1
 through F10.
@@ -75,33 +76,68 @@ Use `input` to inspect semantic sources independently of their transport:
 input touch
 input mouse
 input joystick
+input gesture
 input test touch0
 ```
 
 Touch and other absolute pointers report positions; mice report relative
-deltas; analog joysticks report normalized X/Y axes. Pointer and axis queues
-are allocated only when the first matching source attaches. `input test`
-retains counters and the most recent accepted event, so it also works for
-polling touch controllers while the shell is active.
+deltas; analog joysticks report normalized X/Y axes; gesture sensors report
+recognized motions and taps. `input test` shows counters and the latest event
+while the shell is active.
 
 Native foreground applications opt in to structured pointer input with
 `SOLAR_OS_APP_FLAG_POINTER_EVENTS` and to axis input with
-`SOLAR_OS_APP_FLAG_AXIS_EVENTS`. Their event callback then receives
+`SOLAR_OS_APP_FLAG_AXIS_EVENTS`. Gesture-aware applications opt in with
+`SOLAR_OS_APP_FLAG_GESTURE_EVENTS`. Their event callback then receives
 `SOLAR_OS_EVENT_POINTER` in `event.data.pointer` or `SOLAR_OS_EVENT_AXIS` in
-`event.data.axis`. Pointer events contain the source, pointer ID, absolute or
+`event.data.axis`, or `SOLAR_OS_EVENT_GESTURE` in `event.data.gesture`.
+Pointer events contain the source, pointer ID, absolute or
 relative mode, action, coordinates, deltas, buttons, and optional display
 target. A non-empty target routes to the active opted-in application on that
 display. Its absolute coordinates and deltas follow the target's current
 `setterm orientation`; orientation `0` is the device driver's normal mounting.
 An empty target follows local input focus. Axis events contain the source,
 X/Y/Z/RX/RY/RZ axis, normalized value, and delta and follow local input focus.
+Gesture events contain the recognized kind, direction, flags, optional value,
+and original sensor word and also follow local input focus.
 Applications without the matching flag do not receive those structured events.
 
-Foreground Python and Lua scripts receive the same structured pointer and axis
+Gesture bindings observe the same events without taking them away from the
+foreground application. A binding can match one source or every source, one
+gesture kind, and optionally one direction. Commands run one at a time. The
+cooldown suppresses repeated reports and defaults to 250 ms.
+
+```text
+gesture bind source=gesture0 gesture=flick direction=east -- input emit ALT+RIGHT
+gesture bind source=gesture0 gesture=flick direction=west cooldown=400 -- input emit ALT+LEFT
+gesture bind source=* gesture=double-tap -- /flash/bin/toggle-light.sh
+job start gestures
+gesture bindings
+job stop gestures
+gesture unbind 2
+```
+
+`input emit` creates a virtual local keyboard on first use and injects a key
+tap into the normal input-focus path. Modifier chords use `CTRL`, `SHIFT`,
+`ALT`, `GUI`, or their left/right forms, for example `ALT+RIGHT`. It does not
+send USB or BLE HID reports. A chord tap releases its modifiers together with
+the named key.
+Bindings are deliberately volatile and remain configured when the
+`gestures` job stops. Put the required `gesture bind` commands followed
+by `job start gestures` in the selected startup shell script to recreate
+and activate them after boot. `gesture unbind all` removes every rule and resets
+the next binding ID to 1. Background commands may use shell built-ins or invoke
+scripts, but they cannot launch a foreground application. Stopping the job
+prevents new gesture actions and discards queued actions; a command already
+executing is allowed to finish. Use an explicit display target for display
+actions, for example `setterm --display display0 orientation 90`.
+
+Foreground Python and Lua scripts receive the same structured pointer, axis, and gesture
 events through `solaros.input.read([timeout_ms])`. Touch events expose absolute
 `x`/`y` coordinates and press/move/release actions; relative mice expose
 `delta_x`/`delta_y` and button bits; joystick events expose their named axis,
-normalized value, and delta. `solaros.input.sources()` lists the registered
+normalized value, and delta; gesture events expose names, direction, flags,
+value, and raw sensor data. `solaros.input.sources()` lists the registered
 semantic sources. Each runtime keeps a bounded 16-event foreground queue and
 reports overwritten events through `solaros.input.status().dropped`. Keyboard
 characters remain on `solaros.tui.getch()`.
@@ -184,17 +220,21 @@ enable it; TTGO VGA32 v1.4 disables it to preserve internal heap. Use `setterm
 ble on|off|default` to select an explicit next-boot value or return to the board
 default. The compatible `ble enable`, `ble disable`, and `ble default` commands
 provide the same settings. These commands leave the current boot unchanged and
-do not forget the remembered keyboard or its bond. On a BLE-disabled boot, the
-unused Bluetooth controller and host memory is returned to the internal heap
-before normal service initialization.
+do not forget the remembered keyboard or its bond. Disabling BLE also frees internal memory for other work on the next boot.
 `ble forget` erases the remembered keyboard from SolarOS NVS and removes its BLE
 bond and cached GATT service database. This forces service rediscovery when the
 same keyboard address is paired again, including after keyboard firmware changes
-move its GATT handles. On boards with a system KEY, a long press performs that
-forget operation and then starts a new pairing scan. Pairing has no user
-cancellation path. The KEY short-press power action remains separately
-configurable with `setterm powerkey sleep|suspend`. Suspend is the default;
-another short press resumes the display and restores the prior power profile.
+move its GATT handles. `ble pair` performs that forget operation before it scans
+for a replacement, so switching keyboards does not retain the previous keyboard
+bond. If a keyboard still has an orphaned bond from an older SolarOS release,
+explicit pairing replaces that conflicting bond. On boards with a system KEY,
+`setterm powerkey long ble-pair` assigns this operation to a hold. It is the
+default on targets without a board-owned wired
+keyboard; targets with one default to suspend. Pairing has no user cancellation
+path. The short and long actions are independently configurable with
+`setterm powerkey short <action>` and `setterm powerkey long <action>`.
+A press of any duration resumes suspend, with the wake press consumed until
+release. See the [KEY settings](commands.md) for actions and board defaults.
 
 ## Clipboard
 
@@ -212,5 +252,5 @@ configure_filter, configure_performance, note_on, note_off, all_notes_off, and
 stop. solaros.ble provides status, connected, pair, forget, layout, read.
 solaros.clipboard provides set, get, size, clear. Audio, synth, and BLE are
 package-gated. Foreground Python and Lua applications use solaros.input sources,
-read, clear, and status for structured pointer and axis events; keyboard
+read, clear, and status for structured pointer, axis, and gesture events; keyboard
 characters remain on solaros.tui.getch().

@@ -3,7 +3,7 @@ id = "lua.input"
 title = "Lua input and clipboard API"
 section = "api"
 summary = "Input and clipboard: input, hid, clipboard"
-keywords = "lua solaros api input input hid clipboard"
+keywords = "lua solaros api input gesture pointer axis hid clipboard"
 packages_any = ["app_lua"]
 agent_reference_sections = true
 +++
@@ -21,13 +21,42 @@ agent_reference_sections = true
 
 ## `solaros.input`
 
-- `solaros.input`: `sources`, `read`, `clear`, `status` for foreground pointer and axis events
+Foreground Lua apps can use `capture_keyboard(name)`, `read_key()`, and
+`release_keyboard()` to exclusively capture a ready local key-event source
+before SolarOS shortcuts and character decoding. `read_key()` is nonblocking
+and returns `nil` or a table with `type="key"`, source metadata,
+`physical_key`, canonical HID `usage`, translated `key`, `modifiers`,
+and `action`. Zero usage means the source cannot identify that HID key.
+Actions are `KEY_PRESS`, `KEY_RELEASE`, and `KEY_REPEAT`.
+Modifier bits follow USB HID order; `MOD_CTRL` and `MOD_ALT` match either side.
 
-## Generic pointer and axis input
+One foreground Python or Lua app can own a capture. The selected source bypasses
+focus switching and the usual app-exit key, including while another session has
+focus; the script must provide an exit chord and check `should_exit()`.
+Port characters and other sources retain their normal routing. Release outside
+`pcall` on exit; runtime teardown also releases the capture.
+The 32-event queue returns `{type="reset"}` before subsequent keys on overflow,
+source release, readiness loss, or detach. Release forwarded held keys on reset.
+Detach ends capture of that source even if the source ID is reused.
+Headless runners cannot claim keyboards.
+
+When `service.input-keymap` is included,
+`solaros.input.load_keymap(name, path)` loads a validated JSON mapping file for
+the named attachment, and `solaros.input.reset_keymap(name)` restores its
+built-in map. Both return no values; failures raise an error. Applying a map
+releases held keys. Mappings last until detach or reboot; a startup script
+can reload a saved file. `solaros.input.keymap_info(name)` reports whether a source supports mapping,
+physical keys, modifiers, layers, and tap/hold, together with key count and
+optional matrix metadata. Other drivers currently report `supported=false`.
+See [source keymaps](input.keymap.md) for fields and mapping formats.
+
+- `solaros.input`: `sources`, `read`, `clear`, `status` for foreground pointer, axis, and gesture events
+
+## Generic pointer, axis, and gesture input
 
 `solaros.input.sources()` lists registered input sources with their numeric
 source, name, class, class name, capability bits, and ready state.
-`read([timeout_ms])` returns the next pointer or axis event table, or `nil`; the
+`read([timeout_ms])` returns the next pointer, axis, or gesture event table, or `nil`; the
 maximum timeout is 60000 ms. `clear()` discards queued events, and `status()`
 reports `available`, `queued`, `capacity`, and cumulative `dropped` counts.
 
@@ -35,6 +64,9 @@ Pointer events contain source metadata, `pointer_id`, numeric and named
 `mode`/`action`, `x`, `y`, `delta_x`, `delta_y`, `buttons`, and `target`.
 Absolute touch sources use the coordinates; relative mice use the deltas. Axis
 events contain source metadata, numeric and named `axis`, `value`, and `delta`.
+Gesture events contain numeric and named `gesture` and `direction`, `flags`, a
+source-specific `value`, and the original sensor `raw` word. AirWheel values
+are signed counter steps; 32 steps approximate one revolution.
 
 ```lua
 local solaros = require("solaros")
@@ -49,8 +81,10 @@ while not solaros.should_exit() do
         else
             print("mouse", event.delta_x, event.delta_y, event.buttons)
         end
-    elseif event then
+    elseif event and event.type == "axis" then
         print("axis", event.axis_name, event.value, event.delta)
+    elseif event then
+        print("gesture", event.gesture_name, event.direction_name)
     end
 end
 ```

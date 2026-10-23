@@ -13,12 +13,20 @@ agent_reference_sections = true
 
 ## `solaros.ble`
 
-- `solaros.ble`: keyboard `status`, `connected`, `pair`, `forget`, `layout`, `read`; generic client functions under `solaros.ble.gatt` and application peripheral functions under `solaros.ble.server` when BLE support is compiled
+- `solaros.ble`: keyboard `status` (including the latest reported keyboard
+  battery percentage when available), `connected`, `pair`, `forget`, `layout`,
+  `read`; generic client functions under `solaros.ble.gatt`, application
+  peripheral functions under `solaros.ble.server`, and typed peripheral HID
+  under `solaros.ble.hid` when BLE support is compiled
+
+`solaros.ble.pair()` forgets the remembered keyboard and its bond before it
+starts pairing a replacement. Pairing replaces a conflicting stale keyboard
+bond from an older SolarOS release.
 
 ## BLE scan
 
 `solaros.ble.scan()` returns a one-based array of device tables with the same
-fields and blocking behavior as [Python scan](python.ble.md#solarosblescan).
+fields and blocking behavior as [Python scan](python.ble.md#solaros-ble-scan).
 It includes non-keyboard devices, returns an empty table if none are found,
 and raises a Lua error on scan failure. Call it before opening GATT connections.
 
@@ -30,7 +38,7 @@ end
 
 ## Generic BLE GATT client
 
-`solaros.ble.gatt` mirrors the [Python GATT client](python.ble.md#solarosblegatt):
+`solaros.ble.gatt` mirrors the [Python GATT client](python.ble.md#solaros-ble-gatt):
 `capacity()`, `connect(address, addr_type, timeout_ms)`, `disconnect(peer)`,
 `status(peer)`, `services(peer)`, `characteristics(peer, service_index)`,
 `read(peer, handle, timeout_ms)`, and
@@ -71,7 +79,72 @@ can fail without disturbing existing peers. A caught error or completion of one
 REPL command does not close the interpreter's session. Use `disconnect(peer)`
 when finished with a peer.
 
-`solaros.ble.server` mirrors the [application peripheral API](../ble-server.md):
+## Native BLE HID peripheral
+
+`solaros.ble.hid` mirrors the
+[Python BLE HID API](python.ble.md#solaros-ble-hid). `start(name)` publishes a
+fixed encrypted and bonded composite keyboard, mouse, and gamepad service for
+one host. `start(name, true)` starts a manual host-selection lease, initially
+idle. `hosts()` lists saved HID hosts with `address`, `addr_type`, `connected`,
+and `name`. For manual leases, the current encrypted, bonded host's GAP Device
+Name is read asynchronously, without delaying reports. `name` and
+`status().host_name` are empty until available or when the host does not permit
+the read. Names are UTF-8 prefixes of at most 63 bytes, kept only for the current
+connection. Applications can cache them on mounted storage.
+For manual leases, `connect(address, addr_type)` advertises only to the selected
+saved host, `forget(address, addr_type)` deletes that host pairing, and
+`disconnect()` returns to idle while keeping pairings. Address type defaults to
+zero. The remote host initiates the BLE connection. Reconnect requests use the
+saved bond's authentication and Secure Connections settings; selecting a saved
+host does not require enabling pairing again on the host.
+Manual `pair()` drops the selected connection and advertises a fresh peripheral
+identity for a new host, preserving other saved hosts and the local keyboard.
+The default lease's `pair()` resets the previous host pairing on the public
+identity. Call it only for a user-requested new-host pairing flow.
+When bond storage is full, this explicit pairing flow may replace an unused
+bond, preserving the remembered input keyboard and all connected peers.
+`status()` returns connection, security, subscription, keyboard LED,
+and queue state. `poll()` returns `nil` or a `connected`, `secured`,
+`disconnected`, `keyboard-leds`, or `passkey` event. Render a passkey as six
+digits and enter it on the remote host.
+
+```lua
+local hid = solaros.ble.hid
+hid.start("SolarOS Controls")
+hid.pair()
+
+while not solaros.should_exit() do
+    local event = hid.poll()
+    if event then
+        print(event.type, event.status)
+        if event.type == "passkey" then
+            print(string.format("Enter %06d on the remote host", event.passkey))
+        end
+    end
+    if hid.status().gamepad_subscribed then
+        hid.gamepad.axis(hid.AXIS_X, -12000)
+        hid.gamepad.button(1, true)
+        hid.gamepad.hat(hid.HAT_UP)
+        hid.gamepad.send()
+        break
+    end
+end
+```
+
+Keyboard calls are `keyboard.press`, `keyboard.release`, and
+`keyboard.release_all`. Mouse calls are `mouse.move` and `mouse.button`.
+Gamepad setters accept axes in `-32768..32767`, buttons `1..32`, and `HAT_*`
+directions, then `gamepad.send()` publishes the combined state. Input operations
+require the corresponding encrypted host subscription. The event queue holds
+16 entries; inspect `events_dropped`. `stop()` neutralizes reports and retires
+the service. Runtime teardown does the same automatically.
+
+The native HID service shares the single application-peripheral lease with
+`solaros.ble.server`; the two cannot be active at once. It is separate from the
+dormant USB-only `solaros.hid` package. Scripts select behavior through typed
+operations and constants; report descriptors and raw report bytes stay native.
+
+`solaros.ble.server` mirrors the [application peripheral API](https://github.com/nilseuropa/solar_os/blob/main/doc/ble-server.md):
 `create`, `service`, `characteristic`, `start`, `stop`, `close`, `status`, `peers`,
 `set`, `send`, `disconnect`, and `poll`. Values and event `data` use binary Lua
 strings; `poll()` returns `nil` when empty. Properties combine `solaros.ble.READ`,

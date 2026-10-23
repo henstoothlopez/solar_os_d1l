@@ -2,6 +2,12 @@
 
 #include "esp_err.h"
 #include "solar_os_config.h"
+#if SOLAR_OS_PACKAGE_SERVICE_CREDENTIALS
+#include "solar_os_credentials.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_IRC
+#include "solar_os_irc.h"
+#endif
 #include "solar_os_adc.h"
 #include "solar_os_adc_dpad.h"
 #include "solar_os_battery.h"
@@ -9,7 +15,7 @@
 #include "solar_os_board_caps.h"
 #include "solar_os_buttons.h"
 #include "solar_os_cdc.h"
-#if SOLAR_OS_PACKAGE_SERVICE_CHAT
+#if SOLAR_OS_PACKAGE_SERVICE_GATEWAY
 #include "solar_os_chat.h"
 #endif
 #if SOLAR_OS_PACKAGE_SERVICE_DOCS
@@ -30,6 +36,15 @@
 #include "solar_os_json.h"
 #endif
 #include "solar_os_log.h"
+#if SOLAR_OS_PACKAGE_SERVICE_MESHCORE_COMMON
+#include "solar_os_meshcore_instances.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_LINK && SOLAR_OS_PACKAGE_SERVICE_MESSAGING
+#include "solar_os_link_messaging.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_NATIVE_MODULES
+#include "solar_os_module_packages.h"
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_MQTT
 #include "solar_os_mqtt.h"
 #endif
@@ -103,6 +118,12 @@ void solar_os_boot_services_init(uint32_t now_ms)
     if (identity_err != ESP_OK) {
         SOLAR_OS_LOGW(TAG, "Identity unavailable: %s", esp_err_to_name(identity_err));
     }
+#if SOLAR_OS_PACKAGE_SERVICE_CREDENTIALS
+    const esp_err_t credentials_err = solar_os_credentials_init();
+    if (credentials_err != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "Credentials unavailable: %s", esp_err_to_name(credentials_err));
+    }
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_INBOX
     const esp_err_t inbox_err = solar_os_inbox_init();
     if (inbox_err != ESP_OK) {
@@ -136,13 +157,11 @@ void solar_os_boot_services_init(uint32_t now_ms)
 #endif
 
 #if SOLAR_OS_PACKAGE_SERVICE_WIREGUARD
-    if (solar_os_board_has(SOLAR_OS_BOARD_CAP_WIFI)) {
-        const esp_err_t wireguard_err = solar_os_wireguard_init();
-        if (wireguard_err != ESP_OK) {
-            SOLAR_OS_LOGW(TAG,
-                          "WireGuard unavailable: %s",
-                          esp_err_to_name(wireguard_err));
-        }
+    const esp_err_t wireguard_err = solar_os_wireguard_init();
+    if (wireguard_err != ESP_OK) {
+        SOLAR_OS_LOGW(TAG,
+                      "WireGuard unavailable: %s",
+                      esp_err_to_name(wireguard_err));
     }
 #endif
 
@@ -168,11 +187,26 @@ void solar_os_boot_services_init(uint32_t now_ms)
     }
 #endif
 
-#if SOLAR_OS_PACKAGE_SERVICE_CHAT
+#if SOLAR_OS_PACKAGE_SERVICE_GATEWAY
     const esp_err_t chat_err = solar_os_chat_init();
     if (chat_err != ESP_OK) {
         SOLAR_OS_LOGW(TAG, "Chat service unavailable: %s", esp_err_to_name(chat_err));
     }
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_IRC
+    const esp_err_t irc_err = solar_os_irc_init();
+    if (irc_err != ESP_OK) SOLAR_OS_LOGW(TAG, "IRC unavailable: %s", esp_err_to_name(irc_err));
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_LINK && SOLAR_OS_PACKAGE_SERVICE_MESSAGING
+    const esp_err_t link_chat_err = solar_os_link_messaging_init();
+    if (link_chat_err != ESP_OK) SOLAR_OS_LOGW(TAG, "Link messaging unavailable: %s", esp_err_to_name(link_chat_err));
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_MESHCORE_COMMON
+    const esp_err_t meshcore_instances_err = solar_os_meshcore_instances_init();
+    if (meshcore_instances_err != ESP_OK) SOLAR_OS_LOGW(TAG, "MeshCore instances unavailable: %s", esp_err_to_name(meshcore_instances_err));
 #endif
 
 #if SOLAR_OS_PACKAGE_SERVICE_UART
@@ -274,6 +308,15 @@ void solar_os_boot_services_init(uint32_t now_ms)
     }
 #endif
 
+#if SOLAR_OS_PACKAGE_SERVICE_NATIVE_MODULES
+    const esp_err_t modules_err = solar_os_module_packages_init();
+    if (modules_err != ESP_OK) {
+        SOLAR_OS_LOGW(TAG,
+                      "One or more resident modules were unavailable: %s",
+                      esp_err_to_name(modules_err));
+    }
+#endif
+
 #if SOLAR_OS_PACKAGE_SERVICE_RTC
     const esp_err_t rtc_err = solar_os_time_init();
     if (rtc_err != ESP_OK) {
@@ -282,11 +325,9 @@ void solar_os_boot_services_init(uint32_t now_ms)
 #endif
 
 #if SOLAR_OS_PACKAGE_SERVICE_SENSORS
-    if (solar_os_sensors_has_provider()) {
-        const esp_err_t sensors_err = solar_os_sensors_init();
-        if (sensors_err != ESP_OK) {
-            SOLAR_OS_LOGW(TAG, "Sensors unavailable: %s", esp_err_to_name(sensors_err));
-        }
+    const esp_err_t sensors_err = solar_os_sensors_init();
+    if (sensors_err != ESP_OK) {
+        SOLAR_OS_LOGW(TAG, "Sensors unavailable: %s", esp_err_to_name(sensors_err));
     }
 #endif
 

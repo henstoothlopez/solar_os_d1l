@@ -13,6 +13,8 @@
 #define SOLAR_OS_STORAGE_TYPE_NAME_MAX 12
 #define SOLAR_OS_STORAGE_MOUNT_POINT_MAX 32
 #define SOLAR_OS_STORAGE_READ_MAX_BYTES 65536U
+#define SOLAR_OS_STORAGE_WRITE_MAX_BYTES 65536U
+#define SOLAR_OS_STORAGE_SCANDIR_MAX_LIMIT 128U
 #define SOLAR_OS_STORAGE_LOGICAL_VOLUME_INVALID UINT8_MAX
 
 #ifdef __cplusplus
@@ -29,6 +31,24 @@ typedef struct {
     uint64_t used_bytes;
     uint64_t free_bytes;
 } solar_os_storage_usage_t;
+
+typedef enum {
+    SOLAR_OS_STORAGE_ENTRY_FILE,
+    SOLAR_OS_STORAGE_ENTRY_DIRECTORY,
+    SOLAR_OS_STORAGE_ENTRY_OTHER,
+} solar_os_storage_entry_type_t;
+
+typedef struct {
+    solar_os_storage_entry_type_t type;
+    uint64_t size_bytes;
+    int64_t modified_seconds;
+    uint32_t mode;
+} solar_os_storage_metadata_t;
+
+typedef struct {
+    char name[SOLAR_OS_STORAGE_PATH_MAX];
+    solar_os_storage_metadata_t metadata;
+} solar_os_storage_entry_t;
 
 typedef struct {
     char name[SOLAR_OS_STORAGE_BLOCK_NAME_MAX];
@@ -53,6 +73,7 @@ typedef enum {
     SOLAR_OS_STORAGE_MOUNT_SD,
     SOLAR_OS_STORAGE_MOUNT_FLASH,
     SOLAR_OS_STORAGE_MOUNT_RAMFS,
+    SOLAR_OS_STORAGE_MOUNT_IMAGE,
 } solar_os_storage_mount_type_t;
 
 typedef struct {
@@ -62,9 +83,16 @@ typedef struct {
 } solar_os_storage_mount_info_t;
 
 esp_err_t solar_os_storage_init(void);
+// Changes made through this service invalidate cached filesystem discovery.
+// Streaming/VFS writers can notify after closing a changed file.
+uint32_t solar_os_storage_revision(void);
+void solar_os_storage_notify_changed(void);
 esp_err_t solar_os_storage_mount(void);
 esp_err_t solar_os_storage_mount_volume(const char *name, const char *mount_point);
 esp_err_t solar_os_storage_unmount(void);
+esp_err_t solar_os_storage_prepare_shutdown(void);
+/* After the final display refresh, because SD/display supplies can be shared. */
+esp_err_t solar_os_storage_shutdown_hardware(void);
 esp_err_t solar_os_storage_unmount_volume(const char *target);
 esp_err_t solar_os_storage_format(const char *target);
 bool solar_os_storage_is_mounted(void);
@@ -113,7 +141,18 @@ esp_err_t solar_os_storage_resolve_path_at(const char *cwd,
                                            char *path,
                                            size_t path_len);
 esp_err_t solar_os_storage_resolve_path(const char *arg, char *path, size_t path_len);
+const char *solar_os_storage_entry_type_name(solar_os_storage_entry_type_t type);
+esp_err_t solar_os_storage_stat(const char *path, solar_os_storage_metadata_t *metadata);
+esp_err_t solar_os_storage_exists(const char *path, bool *exists);
+esp_err_t solar_os_storage_scandir(const char *path,
+                                   size_t cursor,
+                                   size_t limit,
+                                   solar_os_storage_entry_t *entries,
+                                   size_t *entry_count,
+                                   size_t *next_cursor,
+                                   bool *has_more);
 esp_err_t solar_os_storage_mkdir(const char *path);
+esp_err_t solar_os_storage_makedirs(const char *path, bool exist_ok);
 esp_err_t solar_os_storage_rmdir(const char *path);
 esp_err_t solar_os_storage_remove(const char *path);
 esp_err_t solar_os_storage_rename(const char *old_path, const char *new_path);
@@ -131,6 +170,13 @@ esp_err_t solar_os_storage_read_file(const char *path,
                                      void *buffer,
                                      size_t buffer_len,
                                      size_t *read_len);
+// Creates or truncates a regular file, or appends when append is true. Empty
+// data is allowed. Flushes and syncs before success; failures can leave partial
+// data. The caller resolves the path and creates any parent directories.
+esp_err_t solar_os_storage_write_file(const char *path,
+                                      const void *data,
+                                      size_t data_len,
+                                      bool append);
 typedef void (*solar_os_storage_copy_progress_fn)(uint64_t bytes_done,
                                                   uint64_t bytes_total,
                                                   void *user);

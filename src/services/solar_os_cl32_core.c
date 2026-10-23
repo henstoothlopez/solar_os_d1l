@@ -10,9 +10,11 @@
 #include "freertos/task.h"
 #include "solar_os_battery.h"
 #include "solar_os_buses.h"
+#include "solar_os_backlight.h"
 #include "solar_os_cl32_keyboard.h"
 #include "solar_os_input.h"
 #include "solar_os_task.h"
+#include "solar_os_power.h"
 
 #define CL32_CORE_POLL_MS 10U
 #define CL32_CORE_TASK_STACK 3072U
@@ -23,7 +25,8 @@
 #define CL32_CORE_REG_INTERRUPT 0x02U
 #define CL32_CORE_REG_EVENT_COUNT 0x03U
 #define CL32_CORE_REG_EVENT 0x04U
-#define CL32_CORE_REG_BATTERY_VOLTAGE 0x1aU
+#define CL32_CORE_REG_BACKLIGHT 0x0FU
+#define CL32_CORE_REG_BATTERY_VOLTAGE 0x14U
 #define CL32_CORE_STATUS_USB (1U << 1)
 #define CL32_CORE_STATUS_CHARGING (1U << 2)
 #define CL32_CORE_INTERRUPT_KEYBOARD (1U << 0)
@@ -105,6 +108,15 @@ static esp_err_t read_register(solar_os_cl32_core_device_t *device,
                                      reg,
                                      value,
                                      sizeof(*value));
+}
+
+static esp_err_t power_off(void *user)
+{
+    solar_os_cl32_core_device_t *device = user;
+    if (device == NULL || !device->active) return ESP_ERR_INVALID_STATE;
+    const uint8_t status = 0xffU;
+    return solar_os_bus_i2c_write_reg(device->i2c_bus, device->address,
+                                     CL32_CORE_REG_STATUS, &status, sizeof(status));
 }
 
 static esp_err_t battery_read(void *user, solar_os_battery_sample_t *sample)
@@ -276,11 +288,23 @@ static void cl32_core_worker(void *arg)
     solar_os_task_delete_internal(NULL);
 }
 
+/* CL-32/CL-32 Software/CL-32/lib/CL32/include/regMap.h: CL32_BL_BRIGHT.
+ * The AVR retains ownership of its keyboard-activity timeout/fade. */
+static esp_err_t set_backlight(void *user, uint8_t percent)
+{
+    const solar_os_cl32_core_device_t *device = user;
+    const uint8_t value = (uint8_t)((percent * 255U + 50U) / 100U);
+    return solar_os_bus_i2c_write_reg(device->i2c_bus, device->address,
+                                      CL32_CORE_REG_BACKLIGHT, &value, 1U);
+}
+
 static void clear_device(solar_os_cl32_core_device_t *device)
 {
+    solar_os_power_unregister_off_provider(device);
     if (device == NULL) {
         return;
     }
+    solar_os_backlight_unregister(device);
     if (device->input_source != SOLAR_OS_INPUT_SOURCE_INVALID) {
         solar_os_input_source_close(device->input_source);
     }
@@ -328,6 +352,11 @@ esp_err_t solar_os_cl32_core_attach(
         clear_device(&cl32_core);
         return err;
     }
+    err = solar_os_backlight_register(set_backlight, &cl32_core);
+    if (err != ESP_OK) {
+        clear_device(&cl32_core);
+        return err;
+    }
     const solar_os_battery_provider_t battery_provider = {
         .read = battery_read,
         .user = &cl32_core,
@@ -351,6 +380,7 @@ esp_err_t solar_os_cl32_core_attach(
         return ESP_ERR_NO_MEM;
     }
 
+    (void)solar_os_power_register_off_provider(name, power_off, &cl32_core);
     ESP_LOGI(TAG,
              "%s attached on %s address 0x%02x as %s and %s",
              name,

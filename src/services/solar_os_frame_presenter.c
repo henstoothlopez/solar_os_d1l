@@ -21,6 +21,8 @@ struct solar_os_frame_presenter {
     char target_name[SOLAR_OS_DISPLAY_TARGET_NAME_MAX];
     uint8_t *presenting;
     uint8_t *queued;
+    uint8_t *writing;
+    bool writing_acquired;
     uint8_t *mono;
     size_t source_size;
     size_t mono_size;
@@ -37,6 +39,7 @@ struct solar_os_frame_presenter {
     TaskHandle_t task;
     volatile bool task_done;
     bool queued_ready;
+    bool presenting_valid;
     bool stop_requested;
     bool mono_fallback;
     bool high_refresh_active;
@@ -102,9 +105,100 @@ static uint8_t rgb565_luma(uint16_t color)
     return (uint8_t)((red * 77U + green * 150U + blue * 29U) >> 8U);
 }
 
+static void frame_convert_native_mono_row(uint8_t *out, const uint8_t *row,
+    unsigned width, const uint16_t *patterns, unsigned phase,
+    solar_os_display_format_t format)
+{
+    unsigned x = 0;
+#define DITHER(index, mask) ((patterns[(index)] >> phase) & (mask))
+    if (format == SOLAR_OS_DISPLAY_FORMAT_INDEX8) {
+        for (; x + 8 <= width; x += 8) {
+            unsigned low = DITHER(row[x], 1) | DITHER(row[x+1], 2) |
+                DITHER(row[x+2], 4) | DITHER(row[x+3], 8);
+            unsigned high = DITHER(row[x+4], 1) | DITHER(row[x+5], 2) |
+                DITHER(row[x+6], 4) | DITHER(row[x+7], 8);
+            out[x >> 3U] = low | (high << 4U);
+        }
+    } else {
+        for (; x + 8 <= width; x += 8) {
+            unsigned a = row[x >> 2U], b = row[(x >> 2U) + 1U];
+            unsigned low = DITHER(a & 3U, 1) | DITHER((a >> 2U) & 3U, 2) |
+                DITHER((a >> 4U) & 3U, 4) | DITHER(a >> 6U, 8);
+            unsigned high = DITHER(b & 3U, 1) | DITHER((b >> 2U) & 3U, 2) |
+                DITHER((b >> 4U) & 3U, 4) | DITHER(b >> 6U, 8);
+            out[x >> 3U] = low | (high << 4U);
+        }
+    }
+    for (; x < width; ++x) {
+        unsigned index = format == SOLAR_OS_DISPLAY_FORMAT_INDEX8 ? row[x] :
+            (row[x >> 2U] >> ((x & 3U) * 2U)) & 3U;
+        out[x >> 3U] |= ((patterns[index] >> (phase + (x & 3U))) & 1U) << (x & 7U);
+    }
+#undef DITHER
+}
+
+static bool frame_convert_indexed_to_mono(solar_os_frame_presenter_t *presenter)
+{
+    const unsigned width = presenter->output_width, height = presenter->output_height;
+    const solar_os_display_format_t format = presenter->config.format;
+    if (!width || !height ||
+        (format != SOLAR_OS_DISPLAY_FORMAT_INDEX8 && format != SOLAR_OS_DISPLAY_FORMAT_INDEX2))
+        return false;
+
+    // One 4x4 ordered-dither pattern per palette entry, in internal stack
+    // memory. Pack output bytes locally instead of repeatedly updating PSRAM
+    // bits. Quotient/remainder steps bound scaling to one carry per pixel,
+    // including reductions by more than one source pixel at a time.
+    uint16_t patterns[256];
+    const unsigned colors = format == SOLAR_OS_DISPLAY_FORMAT_INDEX2 ? 4U : 256U;
+    for (unsigned color = 0; color < colors; ++color) {
+        unsigned darkness = 255U - presenter->mono_luma[color], pattern = 0;
+        for (unsigned y = 0; y < 4; ++y)
+            for (unsigned x = 0; x < 4; ++x)
+                if (bayer4[y][x] * 16U < darkness) pattern |= 1U << (y * 4 + x);
+        patterns[color] = pattern;
+    }
+    const size_t source_stride = presenter->config.stride, output_stride = presenter->output_stride;
+    const uint8_t *source = presenter->presenting;
+    uint8_t *output = presenter->mono;
+    const unsigned x_step = presenter->config.width / width, x_fraction = presenter->config.width % width;
+    const unsigned y_step = presenter->config.height / height, y_fraction = presenter->config.height % height;
+    unsigned source_y = 0, y_accumulator = 0;
+    for (unsigned y = 0; y < height; ++y) {
+        const uint8_t *row = source + source_y * source_stride;
+        uint8_t *out = output + y * output_stride;
+        const unsigned phase = (y & 3U) * 4U;
+        unsigned source_x = 0, x_accumulator = 0;
+        if (presenter->config.width == width) {
+            frame_convert_native_mono_row(out, row, width, patterns, phase, format);
+        } else for (unsigned x = 0; x < width; x += 8) {
+            unsigned count = width - x < 8 ? width - x : 8, bits = 0;
+            if (format == SOLAR_OS_DISPLAY_FORMAT_INDEX8) {
+                for (unsigned k = 0; k < count; ++k) {
+                    bits |= ((patterns[row[source_x]] >> (phase + (k & 3U))) & 1U) << k;
+                    source_x += x_step; x_accumulator += x_fraction;
+                    if (x_accumulator >= width) { x_accumulator -= width; ++source_x; }
+                }
+            } else {
+                for (unsigned k = 0; k < count; ++k) {
+                    unsigned index = (row[source_x >> 2U] >> ((source_x & 3U) * 2U)) & 3U;
+                    bits |= ((patterns[index] >> (phase + (k & 3U))) & 1U) << k;
+                    source_x += x_step; x_accumulator += x_fraction;
+                    if (x_accumulator >= width) { x_accumulator -= width; ++source_x; }
+                }
+            }
+            out[x >> 3U] = bits;
+        }
+        source_y += y_step; y_accumulator += y_fraction;
+        if (y_accumulator >= height) { y_accumulator -= height; ++source_y; }
+    }
+    return true;
+}
+
 static void frame_convert_to_mono(solar_os_frame_presenter_t *presenter)
 {
     memset(presenter->mono, 0, presenter->mono_size);
+    if (frame_convert_indexed_to_mono(presenter)) return;
     uint16_t source_y = 0U;
     uint32_t y_accumulator = 0U;
     for (uint16_t y = 0; y < presenter->output_height; y++) {
@@ -142,10 +236,11 @@ static void frame_prepare_mono_palette(solar_os_frame_presenter_t *presenter)
     const size_t palette_size =
         presenter->config.format == SOLAR_OS_DISPLAY_FORMAT_INDEX2 ? 4U : 256U;
     for (size_t i = 0; i < palette_size; i++) {
-        /* INDEX2 is an ordinal shade ramp. Keep its dither independent of the
-         * color-display theme, then apply the terminal polarity below. */
+        /* By default INDEX2 is an ordinal shade ramp. Literal mono themes
+         * instead use the supplied RGB565 colors and bypass terminal polarity. */
         presenter->mono_luma[i] =
-            presenter->config.format == SOLAR_OS_DISPLAY_FORMAT_INDEX2 ?
+            presenter->config.format == SOLAR_OS_DISPLAY_FORMAT_INDEX2 &&
+                !presenter->config.literal_mono_palette ?
                 (uint8_t)(255U - i * 85U) :
                 rgb565_luma(presenter->config.palette_rgb565[i]);
     }
@@ -167,8 +262,9 @@ static esp_err_t frame_present(solar_os_frame_presenter_t *presenter)
         .height = presenter->output_height,
         .format = presenter->config.format,
         .palette_inverted =
-            solar_os_gfx_palette_inverted(presenter->config.gfx) !=
-            presenter->config.reverse_direct_palette,
+            !presenter->config.literal_direct_palette &&
+            (solar_os_gfx_palette_inverted(presenter->config.gfx) !=
+             presenter->config.reverse_direct_palette),
         .clear_background = presenter->clear_background_pending,
         .background_index = presenter->config.background_index,
     };
@@ -182,7 +278,7 @@ static esp_err_t frame_present(solar_os_frame_presenter_t *presenter)
         frame.source_height = presenter->output_height;
         frame.source_stride = presenter->output_stride;
         frame.format = SOLAR_OS_DISPLAY_FORMAT_MONO1;
-        frame.palette_inverted =
+        frame.palette_inverted = !presenter->config.literal_mono_palette &&
             solar_os_gfx_palette_inverted(presenter->config.gfx);
         frame.clear_background = false;
         frame.background_index = 0U;
@@ -230,6 +326,7 @@ static void frame_presenter_worker(void *arg)
         presenter->presenting = presenter->queued;
         presenter->queued = swap;
         presenter->queued_ready = false;
+        presenter->presenting_valid = true;
         xSemaphoreGive(presenter->mutex);
 
         const int64_t started_us = esp_timer_get_time();
@@ -360,8 +457,8 @@ esp_err_t solar_os_frame_presenter_init(
         config->width == 0U || config->height == 0U ||
         config->stride < frame_minimum_stride(config->format, config->width) ||
         !frame_palette_valid(config) ||
-        (uint32_t)config->width > solar_os_gfx_width(config->gfx) ||
-        (uint32_t)config->height > solar_os_gfx_height(config->gfx)) {
+        solar_os_gfx_width(config->gfx) == 0U ||
+        solar_os_gfx_height(config->gfx) == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -395,8 +492,10 @@ esp_err_t solar_os_frame_presenter_init(
         config->preferred_fps : presenter->target.preferred_stream_fps;
     if (presenter->present_fps == 0U) presenter->present_fps = 25U;
     if (presenter->present_fps > 30U) presenter->present_fps = 30U;
+    /* Fit the source before checking whether its output fits the display. */
     frame_choose_output(presenter);
-    if (presenter->output_width > solar_os_gfx_width(config->gfx) ||
+    if (presenter->output_width == 0U || presenter->output_height == 0U ||
+        presenter->output_width > solar_os_gfx_width(config->gfx) ||
         presenter->output_height > solar_os_gfx_height(config->gfx)) {
         solar_os_memory_free(presenter);
         return ESP_ERR_NOT_SUPPORTED;
@@ -445,7 +544,8 @@ esp_err_t solar_os_frame_presenter_resume(
         return ESP_OK;
     }
     frame_choose_output(presenter);
-    if (presenter->output_width > solar_os_gfx_width(presenter->config.gfx) ||
+    if (presenter->output_width == 0U || presenter->output_height == 0U ||
+        presenter->output_width > solar_os_gfx_width(presenter->config.gfx) ||
         presenter->output_height > solar_os_gfx_height(presenter->config.gfx)) {
         return ESP_ERR_NOT_SUPPORTED;
     }
@@ -467,13 +567,14 @@ esp_err_t solar_os_frame_presenter_resume(
     if (xSemaphoreTake(presenter->mutex, portMAX_DELAY) == pdTRUE) {
         presenter->stop_requested = false;
         presenter->task_done = false;
-        presenter->queued_ready = false;
         presenter->clear_background_pending =
             presenter->config.clear_background_on_resume;
         xSemaphoreGive(presenter->mutex);
     }
+    const uint32_t stack_bytes = presenter->target.presentation_stack_bytes > FRAME_PRESENTER_STACK ?
+        presenter->target.presentation_stack_bytes : FRAME_PRESENTER_STACK;
     const BaseType_t created = solar_os_task_create_pinned_internal(
-        frame_presenter_worker, "frame_present", FRAME_PRESENTER_STACK,
+        frame_presenter_worker, "frame_present", stack_bytes,
         presenter, FRAME_PRESENTER_PRIORITY, &presenter->task,
         tskNO_AFFINITY, SOLAR_OS_TASK_ROLE_FOREGROUND);
     if (created != pdPASS) {
@@ -485,13 +586,14 @@ esp_err_t solar_os_frame_presenter_resume(
         }
         return ESP_ERR_NO_MEM;
     }
+    (void)solar_os_frame_presenter_redraw(presenter);
     return ESP_OK;
 }
 
-void solar_os_frame_presenter_suspend(solar_os_frame_presenter_t *presenter)
+esp_err_t solar_os_frame_presenter_suspend_checked(solar_os_frame_presenter_t *presenter)
 {
     if (presenter == NULL) {
-        return;
+        return ESP_OK;
     }
     TaskHandle_t task = presenter->task;
     if (task != NULL) {
@@ -503,7 +605,7 @@ void solar_os_frame_presenter_suspend(solar_os_frame_presenter_t *presenter)
         if (!solar_os_task_wait_done(task, &presenter->task_done,
                                      SOLAR_OS_TASK_STOP_WAIT_MS)) {
             SOLAR_OS_LOGW(TAG, "present worker stop timed out");
-            return;
+            return ESP_ERR_TIMEOUT;
         }
         presenter->task = NULL;
     }
@@ -515,8 +617,15 @@ void solar_os_frame_presenter_suspend(solar_os_frame_presenter_t *presenter)
         } else {
             SOLAR_OS_LOGW(TAG, "display policy restore failed: %s",
                           esp_err_to_name(err));
+            return err;
         }
     }
+    return ESP_OK;
+}
+
+void solar_os_frame_presenter_suspend(solar_os_frame_presenter_t *presenter)
+{
+    (void)solar_os_frame_presenter_suspend_checked(presenter);
 }
 
 esp_err_t solar_os_frame_presenter_deinit(solar_os_frame_presenter_t *presenter)
@@ -536,6 +645,7 @@ esp_err_t solar_os_frame_presenter_deinit(solar_os_frame_presenter_t *presenter)
     }
     solar_os_memory_free(presenter->mono);
     solar_os_memory_free(presenter->queued);
+    solar_os_memory_free(presenter->writing);
     solar_os_memory_free(presenter->presenting);
     solar_os_memory_free(presenter);
     return ESP_OK;
@@ -550,7 +660,7 @@ bool solar_os_frame_presenter_submit(solar_os_frame_presenter_t *presenter,
         xSemaphoreTake(presenter->mutex, portMAX_DELAY) != pdTRUE) {
         return false;
     }
-    if (presenter->stop_requested) {
+    if (presenter->stop_requested || presenter->writing_acquired) {
         xSemaphoreGive(presenter->mutex);
         return false;
     }
@@ -559,6 +669,72 @@ bool solar_os_frame_presenter_submit(solar_os_frame_presenter_t *presenter,
     }
     memcpy(presenter->queued, data, presenter->source_size);
     presenter->queued_ready = true;
+    xSemaphoreGive(presenter->mutex);
+    (void)xSemaphoreGive(presenter->requested);
+    return true;
+}
+
+esp_err_t solar_os_frame_presenter_acquire(solar_os_frame_presenter_t *presenter,
+                                          uint8_t **data, size_t *size)
+{
+    if (!data || !size) return ESP_ERR_INVALID_ARG;
+    *data = NULL; *size = 0;
+    if (!presenter || !presenter->task ||
+        xSemaphoreTake(presenter->mutex, portMAX_DELAY) != pdTRUE)
+        return ESP_ERR_INVALID_STATE;
+    esp_err_t result = ESP_ERR_INVALID_STATE;
+    if (!presenter->stop_requested && !presenter->writing_acquired) {
+        if (!presenter->writing)
+            presenter->writing = solar_os_memory_alloc(presenter->source_size,
+                SOLAR_OS_MEMORY_EXTERNAL_PREFERRED, "frame.writing");
+        result = presenter->writing ? ESP_OK : ESP_ERR_NO_MEM;
+        if (result == ESP_OK) {
+            presenter->writing_acquired = true;
+            *data = presenter->writing; *size = presenter->source_size;
+        }
+    }
+    xSemaphoreGive(presenter->mutex);
+    return result;
+}
+
+esp_err_t solar_os_frame_presenter_exchange(solar_os_frame_presenter_t *presenter,
+                                           uint8_t **data)
+{
+    if (!data || !*data) return ESP_ERR_INVALID_ARG;
+    if (!presenter || !presenter->task ||
+        xSemaphoreTake(presenter->mutex, portMAX_DELAY) != pdTRUE)
+        return ESP_ERR_INVALID_STATE;
+    if (presenter->stop_requested || !presenter->writing_acquired ||
+        *data != presenter->writing) {
+        xSemaphoreGive(presenter->mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (presenter->queued_ready) presenter->stats.replaced_frames++;
+    uint8_t *completed = presenter->writing;
+    presenter->writing = presenter->queued;
+    presenter->queued = completed;
+    presenter->queued_ready = true;
+    *data = presenter->writing;
+    xSemaphoreGive(presenter->mutex);
+    (void)xSemaphoreGive(presenter->requested);
+    return ESP_OK;
+}
+
+bool solar_os_frame_presenter_redraw(solar_os_frame_presenter_t *presenter)
+{
+    if (presenter == NULL || presenter->task == NULL ||
+        xSemaphoreTake(presenter->mutex, portMAX_DELAY) != pdTRUE) return false;
+    if (presenter->stop_requested ||
+        (!presenter->queued_ready && !presenter->presenting_valid)) {
+        xSemaphoreGive(presenter->mutex);
+        return false;
+    }
+    /* Preserve a newer guest frame if one is already queued. Both buffer
+     * pointers are stable under the mutex; the worker only reads presenting. */
+    if (!presenter->queued_ready) {
+        memcpy(presenter->queued, presenter->presenting, presenter->source_size);
+        presenter->queued_ready = true;
+    }
     xSemaphoreGive(presenter->mutex);
     (void)xSemaphoreGive(presenter->requested);
     return true;

@@ -50,11 +50,6 @@ instead of creating a second copy.
 SolarOS always keeps at least one interactive shell. `exit`, `close`, and
 `session close` refuse to close the final remaining display or port shell.
 
-Native applications receive cooperative tick events every 25 ms by default.
-An application that needs a faster best-effort update rate can set its
-descriptor's `tick_interval_ms` below 25; the runtime raises its scheduler
-cadence while that application is active. A zero value keeps the default.
-
 ## Create another shell
 
 ```text
@@ -73,10 +68,6 @@ and screen-control behavior. Port shells use `--charset utf8` by default; add
 `--charset ascii` for DOS or another legacy terminal so TUI line art and
 symbols are rendered with ASCII fallbacks. The setting does not change
 framebuffer display sessions.
-
-Cursor-addressable port shells echo ordinary end-of-line typing directly and
-send required line edits as one redraw. This keeps the cursor stable on UART,
-USB CDC, and network-backed terminals such as Telnet.
 
 ## Start an app on a display
 
@@ -106,25 +97,25 @@ active. Closing the child resumes the parent. Suspending the child with
 
 ## Local input focus
 
-Keyboard, board-button, and D-pad key events share one local display focus.
-Pointer events without an explicit target use that focus too. Analog joystick
-axes remain semantic axis input and are not converted to focus keys. The
-primary board display is selected at boot. On a headless board, the first
-display shell created becomes the default.
+The locally focused display receives keyboard and board-control input. Touch
+or browser input may target a particular display. Inspect or change focus:
 
 ```text
 session focus
 session focus oled0
 ```
 
-Changing focus does not move or restart a session. It only assigns local input
-and target-scoped session-cycle shortcuts. Browser input from `displayd`
-remains assigned to the display being controlled.
+Changing focus does not move or restart an app. On split displays, use
+`Ctrl+Alt+Arrow` to move focus in the split's direction. At an edge, focus stays
+where it is. On independent displays, those shortcuts cycle through targets.
+Either Alt key works, including AltGr. Plain `Ctrl+Arrow` remains available
+to the app.
 
 ## Quick reference
 
 solaros.sessions.create_shell(port, optional term, cols, rows, charset) returns
 a session id; close(id) closes it. The Lua options table and Python keyword
 form also accept `charset="utf8"` or `charset="ascii"`. Script-created port
-shells do not run /.shell/startup. solaros.apps.list() and find(name) inspect
-registered foreground apps.
+shells do not run /.shell/startup. `solaros.apps.list()` includes installed
+Playground apps, and `launch()`, `open()`, and `can_open()` provide replacement
+handoff from Python and Lua scripts.

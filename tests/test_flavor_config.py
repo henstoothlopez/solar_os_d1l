@@ -1,8 +1,11 @@
+from contextlib import redirect_stdout
 import importlib.util
+import io
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -52,13 +55,62 @@ class FlavorConfigTest(unittest.TestCase):
         self.assertIn("http_client", names)
         self.assertIn("ftp", names)
         self.assertIn("meshcore", names)
-        self.assertIn("gameboy", names)
+        self.assertNotIn("gameboy", names)
         self.assertNotIn("ota", names)
         self.assertNotIn("usb_hid", names)
         self.assertEqual(len(groups), len(names))
         self.assertEqual(self.catalog.group_defs["ssh"].members,
-                         ("app_ssh", "app_scp"))
+                         ("app_ssh", "app_scp", "app_sftp", "app_sftpsync"))
         self.assertEqual(self.catalog.group_defs["ssh"].category, "Networking")
+
+    def test_builder_preserves_input_metadata_without_overrides(self):
+        captured = {}
+
+        def run_without_saving(function, *args):
+            self.assertIs(function, flavor_config._run_tui)
+            captured["name"] = args[8]
+            captured["description"] = args[9]
+            return False, None, None, None
+
+        argv = [
+            "os_builder",
+            "--input", str(REPOSITORY / "flavors" / "writerdeck.toml"),
+            "--output", "renamed.toml",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(
+            flavor_config.curses, "wrapper", side_effect=run_without_saving
+        ), redirect_stdout(io.StringIO()):
+            self.assertEqual(flavor_config.main(), 0)
+
+        self.assertEqual(captured["name"], "writerdeck")
+        self.assertEqual(
+            captured["description"],
+            "Compact SolarOS build with package installation, Python, Playground, writing, media and communications.",
+        )
+
+    def test_builder_metadata_overrides_remain_explicit(self):
+        captured = {}
+
+        def run_without_saving(function, *args):
+            self.assertIs(function, flavor_config._run_tui)
+            captured["name"] = args[8]
+            captured["description"] = args[9]
+            return False, None, None, None
+
+        argv = [
+            "os_builder",
+            "--input", str(REPOSITORY / "flavors" / "writerdeck.toml"),
+            "--output", "renamed.toml",
+            "--name", "renamed",
+            "--description", "Explicit description.",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(
+            flavor_config.curses, "wrapper", side_effect=run_without_saving
+        ), redirect_stdout(io.StringIO()):
+            self.assertEqual(flavor_config.main(), 0)
+
+        self.assertEqual(captured["name"], "renamed")
+        self.assertEqual(captured["description"], "Explicit description.")
 
     def test_tree_contains_categories_and_groups_but_no_packages(self):
         estimator = flavor_config.FlashEstimator(self.catalog, {}, {}, "test")
@@ -80,7 +132,11 @@ class FlavorConfigTest(unittest.TestCase):
         self.assertEqual(model.group_state(ssh.members), 2)
         self.assertIn("app_ssh", model.selected)
         self.assertIn("app_scp", model.selected)
+        self.assertIn("app_sftp", model.selected)
+        self.assertIn("app_sftpsync", model.selected)
         self.assertIn("service_ssh", model.selected)
+        self.assertIn("service_sftp", model.selected)
+        self.assertIn("service_sftpsync", model.selected)
         self.assertIn("service_wifi", model.selected)
         model.toggle_group(ssh.members)
         self.assertNotIn("app_ssh", model.selected)
@@ -229,10 +285,10 @@ class FlavorConfigTest(unittest.TestCase):
         model = flavor_config.SelectionModel(
             self.catalog, (), board.required_packages, board.target, board.capabilities
         )
-        gameboy = self.catalog.group_defs["gameboy"]
-        self.assertFalse(model.group_supported(gameboy))
-        self.assertIn("requires", model.unsupported_reason(gameboy))
-        self.assertIn("streaming_display", model.unsupported_reason(gameboy))
+        buttons = self.catalog.group_defs["board_buttons"]
+        self.assertFalse(model.group_supported(buttons))
+        self.assertIn("requires", model.unsupported_reason(buttons))
+        self.assertIn("buttons", model.unsupported_reason(buttons))
 
     def test_rendered_flavor_uses_groups_and_round_trips(self):
         members = set(self.catalog.group_defs["ssh"].members)

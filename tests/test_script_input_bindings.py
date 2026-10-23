@@ -13,8 +13,20 @@ DESCRIPTOR = (REPOSITORY / "src/apps/solar_os_script_api.inc").read_text(
 
 
 class ScriptInputBindingsTest(unittest.TestCase):
+    def test_capture_preserves_shortcut_bypass_and_idle_activity(self):
+        main = (REPOSITORY / "src/main.c").read_text(encoding="utf-8")
+        dispatch = main.split("static void dispatch_input_key(", 1)[1].split(
+            "static void dispatch_input_pointer(", 1)[0]
+        self.assertLess(dispatch.index("solar_os_input_capture_key_event"),
+                        dispatch.index("session_switch_alt_held"))
+        pump = main.split("static void dispatch_input_sources(void)", 1)[1].split(
+            "static uint32_t requested_tick_interval_ms", 1)[0]
+        self.assertIn("solar_os_input_take_captured_activity()", pump)
+        self.assertIn("solar_os_power_note_activity(millis_u32())", pump)
+
     def test_input_module_has_mirrored_bounded_read_api(self):
-        for function in ("sources", "read", "clear", "status"):
+        for function in ("sources", "read", "clear", "status", "capture_keyboard",
+                         "release_keyboard", "read_key"):
             self.assertIn(
                 f"SOLAR_OS_SCRIPT_API_FUNCTION(input, {function}, {function});",
                 DESCRIPTOR,
@@ -27,15 +39,22 @@ class ScriptInputBindingsTest(unittest.TestCase):
         self.assertIn("input read limited to 60000 ms", PYTHON_SOURCE)
         self.assertIn("input read limited to 60000 ms", LUA_SOURCE)
 
-    def test_runtimes_opt_in_and_forward_pointer_and_axis_events(self):
-        flags = (
-            ".flags = SOLAR_OS_APP_FLAG_POINTER_EVENTS | "
-            "SOLAR_OS_APP_FLAG_AXIS_EVENTS"
-        )
+    def test_source_keymap_controls_have_runtime_parity(self):
+        for function in ("keymap_info", "load_keymap", "reset_keymap"):
+            self.assertIn(f"SOLAR_OS_SCRIPT_API_FUNCTION(input, {function}, {function});", DESCRIPTOR)
+            self.assertIn(f"solaros_input_{function}_obj", PYTHON_SOURCE)
+            self.assertIn(f"solua_input_{function}", LUA_SOURCE)
+        for source in (PYTHON_SOURCE, LUA_SOURCE, DESCRIPTOR):
+            self.assertIn("#if SOLAR_OS_PACKAGE_SERVICE_INPUT_KEYMAP", source)
+
+    def test_runtimes_opt_in_and_forward_pointer_axis_and_gesture_events(self):
         for source in (PYTHON_SOURCE, LUA_SOURCE):
-            self.assertIn(flags, source)
+            self.assertIn("SOLAR_OS_APP_FLAG_POINTER_EVENTS", source)
+            self.assertIn("SOLAR_OS_APP_FLAG_AXIS_EVENTS", source)
+            self.assertIn("SOLAR_OS_APP_FLAG_GESTURE_EVENTS", source)
             self.assertIn("event->type == SOLAR_OS_EVENT_POINTER", source)
             self.assertIn("event->type == SOLAR_OS_EVENT_AXIS", source)
+            self.assertIn("event->type == SOLAR_OS_EVENT_GESTURE", source)
             self.assertIn("sizeof(solar_os_event_t)", source)
             self.assertIn("device_input_dropped", source)
 
@@ -61,18 +80,26 @@ class ScriptInputBindingsTest(unittest.TestCase):
             "axis_name",
             "value",
             "delta",
+            "gesture",
+            "gesture_name",
+            "direction",
+            "direction_name",
+            "flags",
+            "raw",
         )
         for field in fields:
             self.assertIn(f'"{field}"', PYTHON_SOURCE)
             self.assertIn(f'"{field}"', LUA_SOURCE)
 
-    def test_input_constants_cover_discovery_pointer_and_axes(self):
+    def test_input_constants_cover_discovery_pointer_axes_and_gestures(self):
         constants = (
             "SOURCE_TOUCH",
+            "SOURCE_GESTURE",
             "SOURCE_MOUSE",
             "CAP_POINTER_ABSOLUTE",
             "CAP_POINTER_RELATIVE",
             "CAP_AXIS_EVENTS",
+            "CAP_GESTURE_EVENTS",
             "MODE_ABSOLUTE",
             "MODE_RELATIVE",
             "ACTION_MOVE",
@@ -87,6 +114,10 @@ class ScriptInputBindingsTest(unittest.TestCase):
             "AXIS_RX",
             "AXIS_RY",
             "AXIS_RZ",
+            "GESTURE_FLICK",
+            "GESTURE_AIRWHEEL",
+            "DIRECTION_CLOCKWISE",
+            "GESTURE_FLAG_EDGE",
         )
         for constant in constants:
             self.assertRegex(

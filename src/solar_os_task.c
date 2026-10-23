@@ -1,4 +1,5 @@
 #include "solar_os_task.h"
+#include "solar_os_shutdown.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -23,8 +24,13 @@ static portMUX_TYPE task_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 static solar_os_task_role_stats_t task_stats[SOLAR_OS_TASK_ROLE_COUNT];
 static bool task_last_failure_valid;
 static bool task_last_failure_denied;
+static bool task_last_failure_external_stack;
 static solar_os_task_role_t task_last_failure_role;
 static uint32_t task_last_failure_stack;
+static uint32_t task_last_failure_internal_free;
+static uint32_t task_last_failure_internal_largest;
+static uint32_t task_last_failure_external_free;
+static uint32_t task_last_failure_external_largest;
 static char task_last_failure_name[SOLAR_OS_TASK_NAME_MAX];
 static uint32_t task_waiting;
 static uint32_t task_wait_successes;
@@ -71,8 +77,21 @@ static void task_record_success(solar_os_task_role_t role)
 static void task_record_failure(solar_os_task_role_t role,
                                 const char *name,
                                 uint32_t stack_depth,
-                                bool denied)
+                                bool denied,
+                                bool external_stack)
 {
+    const uint32_t internal_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    solar_os_memory_status_t memory;
+    solar_os_memory_get_status(&memory);
+    const uint32_t internal_free =
+        (uint32_t)heap_caps_get_free_size(internal_caps);
+    const uint32_t internal_largest =
+        (uint32_t)heap_caps_get_largest_free_block(internal_caps);
+    const uint32_t external_free =
+        (uint32_t)memory.external.free;
+    const uint32_t external_largest =
+        (uint32_t)memory.external.largest_free;
+
     portENTER_CRITICAL(&task_stats_lock);
     if (denied) {
         task_stats[role].denied++;
@@ -81,8 +100,13 @@ static void task_record_failure(solar_os_task_role_t role,
     }
     task_last_failure_valid = true;
     task_last_failure_denied = denied;
+    task_last_failure_external_stack = external_stack;
     task_last_failure_role = role;
     task_last_failure_stack = stack_depth;
+    task_last_failure_internal_free = internal_free;
+    task_last_failure_internal_largest = internal_largest;
+    task_last_failure_external_free = external_free;
+    task_last_failure_external_largest = external_largest;
     strlcpy(task_last_failure_name,
             name != NULL ? name : "unknown",
             sizeof(task_last_failure_name));
@@ -151,7 +175,11 @@ static bool task_internal_admitted(uint32_t stack_depth, solar_os_task_role_t ro
 static bool task_external_admitted(uint32_t stack_depth, solar_os_task_role_t role)
 {
     const uint32_t internal_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-    const uint32_t external_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    /* WithCaps stack allocations use the wrapped capability allocator, which
+     * can draw from managed PSRAM as well as the SDK heap. Admission must use
+     * the same capacity, including a contiguous block for the entire stack. */
+    solar_os_memory_status_t memory;
+    solar_os_memory_get_status(&memory);
     size_t internal_required = SOLAR_OS_TASK_INTERNAL_OVERHEAD_BYTES;
     if (role == SOLAR_OS_TASK_ROLE_BACKGROUND &&
         !task_add_size(internal_required,
@@ -162,8 +190,8 @@ static bool task_external_admitted(uint32_t stack_depth, solar_os_task_role_t ro
     return heap_caps_get_free_size(internal_caps) >= internal_required &&
            heap_caps_get_largest_free_block(internal_caps) >=
                SOLAR_OS_TASK_INTERNAL_OVERHEAD_BYTES &&
-           heap_caps_get_free_size(external_caps) >= stack_depth &&
-           heap_caps_get_largest_free_block(external_caps) >= stack_depth;
+           memory.external.free >= stack_depth &&
+           memory.external.largest_free >= stack_depth;
 }
 #endif
 
@@ -171,6 +199,7 @@ bool solar_os_task_can_create(uint32_t stack_depth,
                               solar_os_task_role_t role,
                               bool external_stack)
 {
+    if (role != SOLAR_OS_TASK_ROLE_SYSTEM && solar_os_shutdown_requested()) return false;
     if (stack_depth == 0 || !task_role_valid(role)) {
         return false;
     }
@@ -190,16 +219,17 @@ void solar_os_task_get_admission_status(
         return;
     }
     const uint32_t internal_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-    const uint32_t external_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    solar_os_memory_status_t memory;
+    solar_os_memory_get_status(&memory);
     *status = (solar_os_task_admission_status_t){
         .internal_free_bytes =
             (uint32_t)heap_caps_get_free_size(internal_caps),
         .internal_largest_block_bytes =
             (uint32_t)heap_caps_get_largest_free_block(internal_caps),
         .external_free_bytes =
-            (uint32_t)heap_caps_get_free_size(external_caps),
+            (uint32_t)memory.external.free,
         .external_largest_block_bytes =
-            (uint32_t)heap_caps_get_largest_free_block(external_caps),
+            (uint32_t)memory.external.largest_free,
         .background_internal_reserve_bytes =
             SOLAR_OS_INTERNAL_LAUNCH_RESERVE_BYTES,
         .task_internal_overhead_bytes =
@@ -244,7 +274,7 @@ bool solar_os_task_admit(const char *name,
     }
 
     task_record_request(role, stack_depth);
-    task_record_failure(role, name, stack_depth, true);
+    task_record_failure(role, name, stack_depth, true, external_stack);
     task_log_create_failure(name, stack_depth, role, true);
     task_launch_unlock();
     return false;
@@ -260,13 +290,14 @@ bool solar_os_task_admit_managed(const char *name,
         return false;
     }
     admission->launch_locked = false;
+    admission->external_stack = external_stack;
     if (stack_depth == 0 || !task_role_valid(role) || !task_launch_lock()) {
         return false;
     }
     admission->launch_locked = true;
     task_record_request(role, stack_depth);
     if (!solar_os_task_can_create(stack_depth, role, external_stack)) {
-        task_record_failure(role, name, stack_depth, true);
+        task_record_failure(role, name, stack_depth, true, external_stack);
         task_log_create_failure(name, stack_depth, role, true);
         task_launch_unlock();
         admission->launch_locked = false;
@@ -281,21 +312,30 @@ void solar_os_task_note_managed_result(const char *name,
                                        solar_os_task_managed_admission_t *admission,
                                        bool success)
 {
-    if (admission != NULL) {
-        if (admission->launch_locked) {
+    const bool launch_locked = admission != NULL && admission->launch_locked;
+    if (!task_role_valid(role)) {
+        if (launch_locked) {
             task_launch_unlock();
             admission->launch_locked = false;
         }
-    }
-    if (!task_role_valid(role)) {
         return;
     }
     if (success) {
         task_record_success(role);
-        return;
+    } else {
+        task_record_failure(role,
+                            name,
+                            stack_depth,
+                            false,
+                            admission != NULL && admission->external_stack);
     }
-    task_record_failure(role, name, stack_depth, false);
-    task_log_create_failure(name, stack_depth, role, false);
+    if (launch_locked) {
+        task_launch_unlock();
+        admission->launch_locked = false;
+    }
+    if (!success) {
+        task_log_create_failure(name, stack_depth, role, false);
+    }
 }
 
 void solar_os_task_note_wait_queued(void)
@@ -336,7 +376,7 @@ BaseType_t solar_os_task_create_pinned(TaskFunction_t task,
     }
     task_record_request(role, stack_depth);
     if (!solar_os_task_can_create(stack_depth, role, false)) {
-        task_record_failure(role, name, stack_depth, true);
+        task_record_failure(role, name, stack_depth, true, false);
         task_log_create_failure(name, stack_depth, role, true);
         task_launch_unlock();
         return pdFAIL;
@@ -349,12 +389,14 @@ BaseType_t solar_os_task_create_pinned(TaskFunction_t task,
                                                       priority,
                                                       handle,
                                                       core_id);
-    task_launch_unlock();
     if (result != pdPASS) {
-        task_record_failure(role, name, stack_depth, false);
-        task_log_create_failure(name, stack_depth, role, false);
+        task_record_failure(role, name, stack_depth, false, false);
     } else {
         task_record_success(role);
+    }
+    task_launch_unlock();
+    if (result != pdPASS) {
+        task_log_create_failure(name, stack_depth, role, false);
     }
     return result;
 }
@@ -377,7 +419,7 @@ BaseType_t solar_os_task_create_pinned_external(TaskFunction_t task,
     }
     task_record_request(role, stack_depth);
     if (!solar_os_task_can_create(stack_depth, role, true)) {
-        task_record_failure(role, name, stack_depth, true);
+        task_record_failure(role, name, stack_depth, true, true);
         task_log_create_failure(name, stack_depth, role, true);
         task_launch_unlock();
         return pdFAIL;
@@ -392,12 +434,14 @@ BaseType_t solar_os_task_create_pinned_external(TaskFunction_t task,
         handle,
         core_id,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    task_launch_unlock();
     if (result != pdPASS) {
-        task_record_failure(role, name, stack_depth, false);
-        task_log_create_failure(name, stack_depth, role, false);
+        task_record_failure(role, name, stack_depth, false, true);
     } else {
         task_record_success(role);
+    }
+    task_launch_unlock();
+    if (result != pdPASS) {
+        task_log_create_failure(name, stack_depth, role, false);
     }
     return result;
 #else
@@ -472,6 +516,7 @@ bool solar_os_task_wait_done(TaskHandle_t task,
     while (task_done == NULL || !*task_done) {
         const TickType_t elapsed = xTaskGetTickCount() - start;
         if (timeout_ticks == 0 || elapsed >= timeout_ticks) {
+            solar_os_shutdown_note_failure(ESP_ERR_TIMEOUT);
             return false;
         }
 
@@ -505,8 +550,15 @@ void solar_os_task_get_status(solar_os_task_status_t *status)
     status->wait_cancellations = task_wait_cancellations;
     status->last_failure_valid = task_last_failure_valid;
     status->last_failure_denied = task_last_failure_denied;
+    status->last_failure_external_stack = task_last_failure_external_stack;
     status->last_failure_role = task_last_failure_role;
     status->last_failure_stack_bytes = task_last_failure_stack;
+    status->last_failure_internal_free_bytes = task_last_failure_internal_free;
+    status->last_failure_internal_largest_block_bytes =
+        task_last_failure_internal_largest;
+    status->last_failure_external_free_bytes = task_last_failure_external_free;
+    status->last_failure_external_largest_block_bytes =
+        task_last_failure_external_largest;
     memcpy(status->last_failure_name,
            task_last_failure_name,
            sizeof(task_last_failure_name));

@@ -12,15 +12,17 @@ from typing import Any
 
 
 SCHEMA_VERSION = 1
+EXPANSION_DEVICE_BINDING_MAX = 16
 BOARD_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 DEVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 DEFINE_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 HEADER_INCLUDE_RE = re.compile(r"^[A-Za-z0-9_./-]+\.h$")
 TARGET_GPIO_MAX = {"esp32": 39, "esp32s3": 48}
 POLICIES = {"free", "releasable", "fixed"}
-BUS_PROTOCOLS = {"i2c", "spi", "uart", "onewire", "ps2"}
+BUS_PROTOCOLS = {"i2c", "spi", "uart", "onewire", "ps2", "midi"}
 BINDING_KINDS = {
     "gpio",
+    "gpio_line",
     "adc",
     "pwm",
     "i2s_port",
@@ -31,6 +33,7 @@ BINDING_KINDS = {
     "uart_port",
     "ps2_bus",
     "scalar_stream",
+    "byte_stream",
     "parameter",
 }
 PIN_BINDING_KINDS = {"gpio", "adc", "pwm", "spi_cs"}
@@ -40,6 +43,7 @@ TARGET_BINDING_KINDS = {
     "uart_port",
     "ps2_bus",
     "scalar_stream",
+    "byte_stream",
 }
 KEYED_LISTS = {
     ("buses",): "name",
@@ -83,6 +87,7 @@ class DriverDef:
     early: bool
     default_name: str
     bindings: tuple[DriverBinding, ...]
+    keyboard: bool = False
 
 
 def _string_list(value: Any, path: str) -> list[str]:
@@ -121,6 +126,8 @@ def load_driver_catalog(path: Path) -> dict[str, DriverDef]:
         if not DEVICE_NAME_RE.fullmatch(name):
             raise ManifestError(f"{prefix} has an invalid driver name")
         package = raw.get("package")
+        if not isinstance(raw.get("keyboard", False), bool):
+            raise ManifestError(f"{prefix}.keyboard must be a boolean")
         if not isinstance(package, str) or not package:
             raise ManifestError(f"{prefix}.package is required")
         targets = tuple(_string_list(raw.get("targets"), f"{prefix}.targets"))
@@ -152,7 +159,7 @@ def load_driver_catalog(path: Path) -> dict[str, DriverDef]:
             if minimum is not None and maximum is not None and minimum > maximum:
                 raise ManifestError(f"{binding_path} has an inverted value range")
             default_role = key if kind in {
-                "gpio", "adc", "pwm", "parameter", "scalar_stream"
+                "gpio", "gpio_line", "adc", "pwm", "parameter", "scalar_stream", "byte_stream"
             } else ""
             bindings.append(DriverBinding(
                 key=key,
@@ -171,6 +178,7 @@ def load_driver_catalog(path: Path) -> dict[str, DriverDef]:
                for key in raw_board_defines):
             raise ManifestError(f"{prefix}.board_defines contains an invalid macro name")
         result[name] = DriverDef(
+            keyboard=raw.get("keyboard", False),
             name=name,
             summary=str(raw.get("summary") or name),
             package=package,
@@ -308,6 +316,7 @@ def _bus_gpio_roles(bus: dict[str, Any]) -> list[tuple[int, str]]:
         "i2c": ("sda", "scl"),
         "spi": ("sclk", "miso", "mosi"),
         "uart": ("tx", "rx"),
+        "midi": ("tx", "rx"),
         "onewire": ("pin",),
         "ps2": ("clock", "data"),
     }.get(protocol, ())
@@ -458,6 +467,8 @@ def validate_board(board: dict[str, Any], drivers: dict[str, DriverDef]) -> None
         if name in device_names:
             raise ManifestError(f"device {name} is declared more than once")
         device_names.add(name)
+        if not isinstance(device.get("detachable", False), bool):
+            raise ManifestError(f"device {name}.detachable must be a boolean")
         driver = drivers.get(driver_name)
         if driver is None:
             raise ManifestError(f"device {name} uses unknown driver {driver_name!r}")
@@ -471,6 +482,10 @@ def validate_board(board: dict[str, Any], drivers: dict[str, DriverDef]) -> None
         bindings = device.get("bindings")
         if not isinstance(bindings, dict):
             raise ManifestError(f"device {name}.bindings must be a table")
+        if len(bindings) > EXPANSION_DEVICE_BINDING_MAX:
+            raise ManifestError(
+                f"device {name} has more than {EXPANSION_DEVICE_BINDING_MAX} bindings"
+            )
         specs = {binding.key: binding for binding in driver.bindings}
         missing = [binding.key for binding in driver.bindings
                    if binding.required and binding.key not in bindings]
@@ -479,8 +494,40 @@ def validate_board(board: dict[str, Any], drivers: dict[str, DriverDef]) -> None
             raise ManifestError(f"device {name} is missing bindings: {', '.join(missing)}")
         if unknown:
             raise ManifestError(f"device {name} has unknown bindings: {', '.join(unknown)}")
+        if driver.name == "esp32-camera":
+            has_bus = "i2c" in bindings
+            has_siod, has_sioc = "siod" in bindings, "sioc" in bindings
+            if not ((has_bus and not has_siod and not has_sioc)
+                    or (not has_bus and has_siod and has_sioc)):
+                raise ManifestError(
+                    f"device {name} requires either i2c or both siod and sioc"
+                )
         for key, value in bindings.items():
             spec = specs[key]
+            if spec.kind == "gpio_line":
+                controller, line = _parse_gpio_line(value, f"device {name}.{key}")
+                if spec.allowed and line not in spec.allowed:
+                    raise ManifestError(f"device {name}.{key} is not an allowed value")
+                if spec.minimum is not None and line < spec.minimum:
+                    raise ManifestError(f"device {name}.{key} is below {spec.minimum}")
+                if spec.maximum is not None and line > spec.maximum:
+                    raise ManifestError(f"device {name}.{key} is above {spec.maximum}")
+                if not controller:
+                    if line not in pins:
+                        raise ManifestError(
+                            f"device {name}.{key} GPIO{line} is absent from pins"
+                        )
+                    if pins[line].get("policy") == "free":
+                        raise ManifestError(
+                            f"device {name}.{key} GPIO{line} must not be free"
+                        )
+                    previous = direct_pin_owners.get(line) or bus_signal_owners.get(line)
+                    if previous is not None:
+                        raise ManifestError(
+                            f"GPIO{line} is shared by {previous} and {name}.{key}"
+                        )
+                    direct_pin_owners[line] = f"{name}.{key}"
+                continue
             if spec.kind in TARGET_BINDING_KINDS:
                 if not isinstance(value, str) or not value:
                     raise ManifestError(f"device {name}.{key} must name a resource")
@@ -543,6 +590,23 @@ def _c_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _parse_gpio_line(value: Any, path: str) -> tuple[str, int]:
+    if isinstance(value, int):
+        if value < 0 or value > 255:
+            raise ManifestError(f"{path} GPIO must be between 0 and 255")
+        return "", value
+    if not isinstance(value, str) or ":" not in value:
+        raise ManifestError(f"{path} must be a GPIO number or controller:line")
+    controller, separator, line_text = value.rpartition(":")
+    if (not separator or not DEVICE_NAME_RE.fullmatch(controller) or
+            not line_text.isdigit()):
+        raise ManifestError(f"{path} must be a GPIO number or controller:line")
+    line = int(line_text)
+    if line < 0 or line > 255:
+        raise ManifestError(f"{path} line must be between 0 and 255")
+    return controller, line
+
+
 def _macro_lines(name: str, entries: list[str], empty: str = "{{0}}") -> list[str]:
     if not entries:
         return [f"#define {name} {empty}"]
@@ -591,12 +655,17 @@ def _bus_initializer(bus: dict[str, Any]) -> str:
             f".cs_count = {len(cs)}, .cs = {{{cs_entries}}}"
             "}"
         )
-    elif protocol == "uart":
+    elif protocol in {"uart", "midi"}:
+        default_baud = (
+            "SOLAR_OS_BUS_MIDI_DEFAULT_BAUD_RATE"
+            if protocol == "midi"
+            else "SOLAR_OS_BUS_UART_DEFAULT_BAUD_RATE"
+        )
         config = (
             ".config.uart = {"
             f".port = {bus['port']}, .tx_pin = GPIO_NUM_{bus['tx']}, "
             f".rx_pin = GPIO_NUM_{bus['rx']}, "
-            f".baud_rate = {bus.get('baud_rate', 'SOLAR_OS_BUS_UART_DEFAULT_BAUD_RATE')}"
+            f".baud_rate = {bus.get('baud_rate', default_baud)}"
             "}"
         )
     elif protocol == "onewire":
@@ -612,31 +681,44 @@ def _bus_initializer(bus: dict[str, Any]) -> str:
     return common + config + "}"
 
 
-def _binding_initializer(spec: DriverBinding, value: Any, bindings: dict[str, Any]) -> str:
+def _binding_initializer(spec: DriverBinding,
+                         value: Any,
+                         bindings: dict[str, Any],
+                         buses: dict[str, dict[str, Any]]) -> str:
     kind = f"SOLAR_OS_EXPANSION_BINDING_{spec.kind.upper()}"
     fields = [f".kind = {kind}"]
     if spec.role:
         fields.append(f".role = {_c_string(spec.role)}")
     if spec.kind in TARGET_BINDING_KINDS:
         fields.append(f".target = {_c_string(value)}")
+        if spec.kind == "uart_port":
+            fields.append(f".value = {buses[str(value)]['port']}")
     elif spec.kind == "spi_cs":
         fields.append(f".target = {_c_string(str(bindings['spi']))}")
         fields.append(f".value = {value}")
+    elif spec.kind == "gpio_line":
+        controller, line = _parse_gpio_line(value, f"binding {spec.key}")
+        if controller:
+            fields.append(f".target = {_c_string(controller)}")
+        fields.append(f".value = {line}")
     else:
         fields.append(f".value = {value}")
     return "{" + ", ".join(fields) + "}"
 
 
-def _device_initializer(device: dict[str, Any], drivers: dict[str, DriverDef]) -> str:
+def _device_initializer(device: dict[str, Any],
+                        drivers: dict[str, DriverDef],
+                        buses: dict[str, dict[str, Any]]) -> str:
     driver = drivers[device["driver"]]
     bindings = device["bindings"]
     entries = [
-        _binding_initializer(spec, bindings[spec.key], bindings)
+        _binding_initializer(spec, bindings[spec.key], bindings, buses)
         for spec in driver.bindings
         if spec.key in bindings
     ]
     return (
         "{.driver = " + _c_string(driver.name) + ", .name = " + _c_string(device["name"]) +
+        (", .detachable = true" if device.get("detachable", False) else "") +
         f", .binding_count = {len(entries)}, .bindings = {{" + ", ".join(entries) + "}}"
     )
 
@@ -693,10 +775,13 @@ def generate_header(board: dict[str, Any], drivers: dict[str, DriverDef]) -> str
     ))
 
     devices = board.get("devices", [])
+    buses_by_name = {str(bus["name"]): bus for bus in buses}
+    wired_keyboard = any(drivers[device["driver"]].keyboard for device in devices)
+    lines.append(f"#define SOLAR_OS_BOARD_HAS_WIRED_KEYBOARD {int(wired_keyboard)}")
     lines.append(f"#define SOLAR_OS_BOARD_DEFAULT_EXPANSION_DEVICE_COUNT {len(devices)}")
     lines.extend(_macro_lines(
         "SOLAR_OS_BOARD_DEFAULT_EXPANSION_DEVICES",
-        [_device_initializer(device, drivers) + "," for device in devices],
+        [_device_initializer(device, drivers, buses_by_name) + "," for device in devices],
     ))
 
     connector = board.get("connector", {})

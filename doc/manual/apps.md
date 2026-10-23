@@ -4,51 +4,232 @@ title = "Application reference"
 section = "app"
 summary = "Usage, controls, and examples for every foreground application"
 aliases = ["applications"]
-keywords = "apps applications foreground controls usage examples launcher graphical grid icons reader writer sketch paint pointer png markdown less files edit hexedit binary agent calculator calc graph webradio radio mp3 function generator funcgen waveform sweep"
+keywords = "apps applications foreground controls usage examples launcher graphical grid icons reader writer sketch paint pointer png markdown less ltop cpu tasks monitor files edit hexedit binary agent calculator calc graph webradio radio mp3 function generator funcgen waveform sweep"
 packages_any = []
 +++
 # SolarOS Embedded Apps
 
-This document covers foreground applications registered in SolarOS. Availability
-depends on the selected firmware flavor and board capabilities. The `apps`
-command shows the app set compiled into the running image.
+Run `apps` to list the applications available in your firmware. Start an app
+by its command name, with any arguments shown below.
 
-Exit behavior:
+## Common controls
 
-- Display shell: `CTRL+ALT+DEL` exits foreground apps.
-- Port shells: `Ctrl+]` exits foreground apps.
-- Application screens are private presentation state and are discarded when
-  the application exits. Text written to the application output channel is
-  preserved in the launching shell before its next prompt; Python and Lua use
-  this channel for stdout, errors, and tracebacks. The normal terminal
-  scrollback limit still applies.
-- Every foreground application returns an exit code to its launching shell and
-  can return an optional message. Normal exits use code 0 and stay silent;
-  failures use a nonzero code and a useful message. `status` shows the most
-  recent foreground-application exit code.
-- The runtime assigns every launchable foreground application to one lifecycle
-  class. Commands preserve their sequential text transcript. TUI applications
-  discard their screen buffer. GUI applications discard their framebuffer.
-  Hybrid applications such as `python`, `lua`, `calc`, and `webradio` select
-  the effective class from the mode that was launched.
-- A fatal startup or runtime error is an exit outcome, not an application
-  screen. The runtime closes the application immediately, restores the
-  launching shell, prints the diagnostic there, and does not wait for an
-  acknowledgement key.
-- Port shells: `Ctrl+Z` suspends a resumable app and returns to the prompt;
-  `fg` restores the most recently suspended app.
-- `Alt+Tab` or `Alt+Right` switches to the next resumable foreground session on
-  the locally focused display. `Alt+Left` switches to the previous session.
-  Either Alt key is accepted, including AltGr on compact keyboards.
-  Switching back restores the retained terminal or graphics frame, including
-  Python and Lua application screens.
-- `Alt+Enter` toggles full-screen mode in applications that use the shared TUI.
-  Either Alt key is accepted, including AltGr; on the CL-32 keyboard, use
-  `File+OK`. Full-screen mode hides the system status bar and persistent TUI
-  footer rows without changing the saved terminal profile. TUIs start in this
-  mode automatically when ten or fewer terminal rows are available. Input rows
-  remain visible, and status or error feedback can temporarily cover the last
-  content row.
+| Action | Display | Port terminal |
+| --- | --- | --- |
+| Close the current app | `Ctrl+Alt+Del` | `Ctrl+]` |
+| Switch to a retained session | `Alt+Tab` or `Alt+Right`; previous with `Alt+Left` | `Ctrl+Z` to suspend, then `fg` or `fg ID` to resume |
+| Move local input between displays | `Ctrl+Alt+Arrow` | `session focus TARGET` |
+
+Either Alt key works, including AltGr. Apps may also provide `Esc` or `Q` to
+exit. In shared text menus, `Alt+Enter` toggles full screen; on CL-32 use
+`File+OK`. Small text menus start in full screen automatically.
+
+Closing returns to the shell. Python/Lua stdout, errors, and tracebacks remain
+in shell scrollback; app screens are discarded. Errors return to the shell
+with a diagnostic. Run `status` to check the most recent app exit code: 0 means
+success. See [Sessions](sessions.apps.md) for switching and display focus.
+
+## dlp
+
+Use a named SolarOS display as a Display Link Protocol receiver. The `dlp`
+package requires graphics support. One receiver may run at a time.
+
+```text
+dlp serve display0 stream=cdc0
+dlp status
+dlp stop display0
+```
+
+Run these commands from the local display shell or a separate port/network
+shell. The selected stream must provide exclusive, ordered, duplex bytes.
+Release any shell, log, or bridge owner on that stream first; DLP needs both
+directions for commands and replies. DLP does not configure baud rates,
+establish network connections, or add a BLE/radio transport.
+
+The receiver runs as a foreground session on the named display, suspending its
+previous session. It advertises the current display orientation and MONO1
+pixels (black=1, least-significant pixel first). Targets with direct RGB565
+presentation also advertise RGB565 with big-endian pixel bytes. The host must
+use an advertised format. Updates are staged; the display changes on PRESENT.
+Changed rectangles and RLE are supported. A new connection/session must send a
+full image before partial updates.
+The receiver also supports negotiated upload windows of up to 16 packets.
+Uploads receive cumulative progress acknowledgements, and the final reply
+waits for presentation completion. Lost or corrupt packets are retransmitted
+within the bounded window; retries do not repeat accepted writes or PRESENT.
+
+MONO1 uses direct presentation where supported. Displays with an INDEX2 raster
+backend use batched MONO1 conversion and send changed regions,
+without rebuilding a graphics canvas. This path needs an extra two-bit-per-pixel
+conversion buffer (38,400 bytes at 480×320). Initial frames and resume redraws
+repaint the full display. Other targets use the regular graphics canvas.
+
+`Ctrl+]`, `Ctrl+Alt+Delete`, Escape, or `dlp stop <display>` closes the receiver,
+releases the stream, and restores the previous session, including while waiting
+for a host. Suspension pauses protocol
+processing; resuming redraws the last completed image. Provider disconnects and
+I/O errors leave the app waiting for a new connection, retaining the last
+completed image. The receiver retries opening an unavailable stream. Each
+reopened transport starts a fresh protocol session and requires a full image.
+Serial links with no disconnect indication remain listening until stopped.
+
+The desktop test sender requires Python, pyserial, and Pillow:
+
+```sh
+python3 -m pip install pyserial Pillow
+python3 scripts/dlp_image.py --port /dev/ttyACM0 image.png
+python3 scripts/dlp_image.py --port /dev/ttyACM0 --demo --frames 20 --stats
+python3 scripts/dlp_image.py --port /dev/ttyACM0 --demo --fps 30 --frames 100 --stats
+python3 scripts/dlp_image.py --port /dev/ttyACM0 --demo --frames 6 --reconnect-every 2
+```
+
+Start the receiver before running the sender. The script discovers geometry,
+fits images on a white background, and sends MONO1 frames. `--legacy-cells`
+tests fixed-cell framing; compact DLP framing is the default. This is an image
+test tool; desktop virtual-monitor integration belongs to a host project.
+Windowed uploads are negotiated by default, with automatic fallback for older
+receivers. `--no-window` forces the original stop-and-wait behavior for comparison;
+it is independent of `--legacy-cells`. After display suspension invalidates
+retained content, the sender starts a new session and repaints fully.
+
+For Wi-Fi, create a raw TCP stream from a separate device console:
+
+```text
+stream tcp listen tcp0 7777
+dlp serve display0 stream=tcp0
+```
+
+Then run the desktop sender, replacing the example address with the device IP:
+
+```sh
+python3 scripts/dlp_image.py --tcp 192.0.2.10:7777 --demo --fps 30 --frames 100 --stats
+```
+
+TCP needs Pillow but does not need pyserial. Use the raw TCP listener, rather
+than a Telnet shell port. Closing the TCP sender leaves DLP waiting on the same
+listener. Connect a new sender without running `dlp serve` again. To remove the endpoint,
+stop DLP first if it is running, then run `stream tcp remove tcp0`.
+
+For a BLE connection between two SolarOS devices, configure a CoC listener on
+the receiving device and start DLP:
+
+```text
+stream ble listen ble0
+dlp serve display0 stream=ble0
+```
+
+On the sending device, use `ble scan` to find the advertised `SolarOS ble0`
+peripheral. Copy its address and address type into the connect command:
+
+```text
+stream ble connect ble0 aa:bb:cc:dd:ee:ff public
+expansion attach stream-dlp remote stream=ble0
+display test remote
+```
+
+The central/peripheral roles belong to the BLE connection; either side can
+serve a display or send frames. Release the consumer to close the connection.
+DLP serving waits for a new connection after a disconnect. An attached
+`stream-dlp` display reconnects on a subsequent presentation attempt. To remove
+an endpoint, stop DLP or detach the display, then `stream ble remove ble0`.
+See [BLE stream commands](commands.md#ble-byte-streams).
+
+`--stats` prints actual completion rate, byte counts, and host wall times per
+input frame: `prep` generates/loads and converts the image; `upload` plans and
+sends the update, including intermediate window checkpoints; `present_wait`
+runs from PRESENT through the completion reply. With windows it also includes
+sending the final buffered upload batch. `total` includes preparation and any
+requested reconnect, and excludes
+the intentional frame-rate sleep. The final summary counts presented frames
+and unchanged images separately; unchanged images do not increase completed
+FPS. The default rate limit is 2 FPS; `--fps 30` sets a 30 FPS ceiling and
+includes image preparation in that budget.
+
+Run `dlp status` from a separate shell for receiver-side last/average/maximum
+timings in microseconds. `render` measures MONO1 canvas preparation or changed-area
+detection and batched INDEX2 conversion; `display`
+measures the display-service call, including driver conversion, rotation,
+tile checks and I/O. Unconverted direct rasters have zero separate `render`
+time. All driver work is included under `display`. `total` is their sum.
+These measurements exclude wire upload, startup and resume/overlay redraws;
+they measure service completion, not panel scanout. Completion rate averages
+the intervals between the first and last DLP frame, including host pacing.
+The statistics remain available after stopping, until the next receiver start.
+Host `present_wait` includes stream transfer, round trips, scheduling and
+legacy status polling,
+so it is not a device-only or SPI-only measurement. Diagnostics never enter
+the DLP byte stream.
+
+## rtsp
+
+Play a trusted-LAN RTSP stream using UDP RTP/JPEG video and RTP/L16 audio.
+
+```text
+rtsp rtsp://192.168.1.238/media
+rtsp 192.168.1.238/media
+rtsp user:secret@192.168.1.192:8554/youtube
+rtsp --audio-only rtsp://192.168.1.113/media
+rtsp --stats rtsp://192.168.1.192:8554/youtube
+rtsp --audio-only --stats rtsp://192.168.1.192:8554/youtube
+rtsp-auth set 192.168.1.50 admin camera-password
+rtsp rtsp://192.168.1.50/media
+```
+
+The `rtsp://` prefix is optional. The RTSP control connection uses TCP port 554
+unless a port is supplied; RTP media uses negotiated UDP ports. Addresses without
+a path are accepted; include the publisher's path when required.
+
+Inline credentials use `user:password@host`; percent-encode spaces and reserved
+characters in the username or password.
+`rtsp-auth set <host[:port]> <user> <password>` saves up to four accounts
+for URLs without inline credentials.
+Run `rtsp-auth` to list accounts, or `rtsp-auth clear [host[:port]]` to remove
+one account or all accounts when the host is omitted. The player hides passwords.
+
+Graphical sessions show aspect-fit JPEG video when a video track is selected.
+Audio-only sessions use the common audio GUI oscilloscope, fed by playback PCM,
+filling the available area between the header and player controls.
+Port shells select audio only and print playback status. `--audio-only` skips
+video negotiation and video buffers even when the publisher offers both tracks.
+Audio uses the selected default output and global volume; Up/Down adjust volume
+(`+`/`-` remain aliases). The graphical player uses the common header, volume
+bar, and Stop/Play button. Enter, Space, or a tap on the button stops playback
+without closing the app; Play reconnects to the same URL. Stopping releases the
+network, decoder, audio output, and media buffers once their workers finish.
+RTSP URLs are single sources, so there are no Previous/Next buttons.
+`F` toggles fullscreen, hiding the header and controls while retaining aspect-fit
+video or expanding the audio-only oscilloscope to the whole screen. `D` toggles
+the separate frame diagnostic overlay: received, displayed, network/app drops,
+and displayed frames per second. `Q`, Escape, or the normal application-exit key
+closes playback.
+Suspending keeps audio playing and pauses video decoding until you return.
+Closing releases the audio output and network connection.
+
+Temporary connection failures retry up to six times. Unsupported codecs,
+failed or unsupported authentication, and local memory or audio failures stop
+immediately.
+The shell diagnostic identifies the failing operation. Use `--stats` and
+`log show` for frame counts, drops, timings, audio buffering, and retry details.
+The `D` overlay works without logging; `--stats` also enables it initially.
+
+Requirements and limits:
+
+- IPv4 RTSP 1.0 with unicast UDP media. Client authentication supports Basic
+  or Digest MD5 (`qop=auth` or no qop); the `rtspd` publisher remains
+  unauthenticated.
+- One JPEG video track and/or one L16 audio track (8–48 kHz, mono or stereo).
+- JPEG types 0/1 with explicit 8-bit quantization tables (Q=255); restart
+  markers are supported.
+- TCP interleaving, multicast, encrypted RTSP, compressed audio, and
+  redirects are unsupported.
+- Five seconds without media triggers reconnection. Retry exhaustion returns
+  an error to the shell.
+- `rtspd` allows one receiver at a time; stop another receiver before connecting.
+- Microphone capture cannot be opened while playback is active.
+
+If playback reports no memory, use `mem` to check internal memory and its
+largest free block, then stop unused jobs. PSRAM alone does not meet audio
+and DMA memory requirements.
 
 ## agent
 
@@ -68,6 +249,8 @@ agent config reasoning medium
 agent config tools confirm
 agent config max-tools 16
 agent
+job start speechd /voices/en-US
+agent --tts
 agent list
 agent resume SLOT
 agent ask How much memory is free on this device?
@@ -86,23 +269,26 @@ performs one unsaved request but likewise waits for `Esc` or the app-exit key
 after completion, so display-shell output is not immediately replaced by the
 shell screen.
 
+`agent --tts`, `agent --tts new`, `agent --tts resume SLOT`, and
+`agent --tts ask PROMPT` keep the written answer and also queue the successful
+final model response through the running local PicoTTS `speechd`. Start
+`speechd` with a voice directory first. Status and retry messages, tool calls,
+tool results, confirmations, and intermediate text before a tool call are not
+spoken.
+
 Use `agent config key clear` for an endpoint that does not require bearer
 authentication. `agent status` shows configuration, request counters, HTTP
 status, reasoning effort, duration, traffic, and internal-RAM/PSRAM measurements
 from the last request. The API key itself is never printed. A
 Chat-Completions-compatible endpoint can still be configured explicitly.
 
-The agent permits 16 sequential tool calls by default, followed by a separately
-reserved final provider turn. `agent config max-tools COUNT` stores a
-per-request limit from 1 through 32 in NVS. The final turn advertises no tools
-after that budget is consumed, so the model concludes from the collected
-results instead of failing on one more tool request. Output is bounded to
-16 KiB, protocol buffers and queues prefer PSRAM, and the foreground worker
-uses a declared 16 KiB internal stack.
-Full builds can reuse that worker for bounded Python or Lua source/file
-execution. The manual script path captures at most 4095 output bytes, has a
-30-second deadline, and supports cancellation with `Esc` or the app-exit key.
-Model-generated source is capped at 640 bytes and captures 383 output bytes.
+The agent allows 16 tool calls per request by default. Set a limit from 1 to
+32 with `agent config max-tools COUNT`. When the budget is used, it gives a
+final answer from the results already collected. Answers are limited to 16 KiB.
+
+`agent script` supports Python or Lua with a 30-second deadline and up to 4095
+output bytes. Model-generated scripts are limited to 640 source bytes and 383
+output bytes. `Esc` or the app-exit key cancels execution.
 
 The storage registry includes bounded listing, sensitive text-file reads, and
 text-file replacement. Reads and writes are capped at 3072 bytes and paths
@@ -188,6 +374,12 @@ Recorder selects its graphical interface on a graphical shell and its text
 interface on a port shell. `--tui` forces the text interface even when the
 launching shell has graphics.
 
+On displays narrower than 240 pixels or shorter than 180 pixels, the graphical
+media controls use an 8-pixel bitmap font and smaller transport buttons.
+Short displays show volume as a percentage beside the filename instead of a
+volume bar. Lists scroll to keep the selected entry visible, and edit dialogs
+fit the display. When the cassette cannot fit, the visualizer uses a scope.
+
 `Tab` switches between Record and Setup. The Record view uses the shared
 cassette widget by default; `V` cycles through Cassette, Oscilloscope, and
 Spectrum. `R` starts recording, Space pauses or resumes, `S` stops and
@@ -262,10 +454,6 @@ Funcgen is active:
 - `funcgen.output`: runtime output index; 0 follows the default output.
 - `funcgen.enabled`: 0 off or 1 on.
 
-The durable foreground state and oscilloscope storage use PSRAM when present.
-Only the bounded oscillator/render state, Synth worker stack, and PCM block
-remain in internal SRAM.
-
 ## player
 
 Interactive WAV/MP3 player and the user-facing counterpart to `aplay`. `player`
@@ -281,23 +469,35 @@ player [--tui] [file.wav|file.mp3]
 
 Player selects its graphical interface on a graphical shell and its text
 interface on a port shell. `--tui` forces the text interface even when the
-launching shell has graphics.
+launching shell has graphics. The graphical controls and lists
+adapt to small displays, including 240×64 and 128×64 targets.
 
 On a graphical session, `Tab` switches between Play and Playlist. The Play tab
-uses the top two-thirds for a cassette visualizer by default; `V` cycles through
-Cassette, Oscilloscope, and Spectrum. The cassette reels turn only while audio
-plays and show track progress when duration is known. `Left`/`Right` plays the
+uses the space above the shared bottom controls for a cassette visualizer by
+default; `V` cycles through Cassette, Oscilloscope, and Spectrum. The cassette
+reels turn only while audio plays and show track progress when duration is
+known. `Left`/`Right` plays the
 previous or next track in the playlist ring, `Enter` plays or stops, Space
-pauses or resumes, and `Up`/`Down` adjusts volume. On the Playlist tab,
+pauses or resumes, and `Up`/`Down` adjusts volume. `<`/`>` seeks backward/forward
+by ten seconds without changing tracks; rewind/forward buttons provide the
+same actions. Seeking preserves pause state and discards queued audio.
+The controls show the track name, playback status and time above the volume bar.
+The middle button stops or starts playback and indicates pause while paused.
+On the Playlist tab,
 `Up`/`Down` selects, `Enter` starts the track and returns to Play, `A` opens the
 WAV/MP3 file browser, and `Delete` removes the selected playlist entry.
 
 The text interface is one playlist screen: `Up`/`Down` selects, `Enter` plays
-or stops, Space pauses or resumes, `A` opens the filtered file browser,
+or stops, Space pauses or resumes, `<`/`>` seeks backward/forward ten seconds,
+`A` opens the filtered file browser,
 `Delete` removes an entry, and `Esc` exits. Its bottom status line shows the
 playing, paused, or stopped state with elapsed and total time. Playback follows
 the resumable app while another foreground session is selected and stops when
 Player closes. End of file advances to the next playlist entry.
+
+Player shows `SEEKING` while preparing a new position. MP3 seeking can take
+longer on slow storage, including with variable-bitrate files. Stop playback
+to cancel a seek.
 
 WAV playback converts the file's mono/stereo channel count and sample rate to
 the selected output stream. A mono recording therefore plays through a fixed
@@ -359,20 +559,25 @@ Graphical controls:
 
 ## chat
 
-Tabbed provider-neutral conversation client. The Channels tab lists gateway and
-radio conversations. Enter selects a conversation and opens its bounded shared
+Tabbed provider-neutral conversation client. The Channels tab groups conversations
+by named instance, including IRC, Gateway, MeshCore, and Link. Enter selects a conversation and opens its bounded shared
 history on the Chat tab, which also contains the message/command input. The app
 opens and remains useful offline; network or radio transport jobs connect
 independently.
 
+MeshCore channel labels distinguish `[radio]` and `[companion]`. Entries marked
+`(history)` retain readable messages but cannot accept sends. After submitting
+a message, the footer follows its delivery state through `queued`, `sending`,
+`sent`, `delivered`, or `failed`.
+
 Usage:
 
 ```text
-chat [gateway|meshcore|link|conversation-id]
+chat [instance|class|conversation-id]
 ```
 
 With no selector, Chat opens a unified view and initially selects the newest
-unread conversation. A provider name filters the list. A decimal conversation
+unread conversation. An instance name or provider class filters the list. A decimal conversation
 ID opens exactly that conversation.
 
 The background `gateway-sync` job owns the gateway transport connection, retries, and
@@ -401,13 +606,19 @@ Gateway setup and room lifecycle use `gateway status`, `gateway configure`,
 the `gateway-sync` job name. Selecting a known gateway room in the Channels tab
 requests a join automatically and opens it after the server confirms `joined`.
 
+Additional Gateway connections use `messages add gateway NAME URL [TOKEN]`,
+`messages connect NAME`, and `messages join NAME ROOM`. The same `gateway-sync`
+job maintains every enabled instance independently. In Chat, use `/add gateway
+NAME URL [TOKEN]`, `/connect NAME`, and `/join NAME ROOM`. `/remove NAME` closes
+the instance and deletes its settings, pending sends, and local history.
+
 Conversation rows show provider, unread, and security state. Outbound rows show
 queued/sending/sent/delivered/failed state. Use `/new CONTACT_ID` to open a
 direct conversation with the contact's preferred endpoint. Sending to a
 discovered endpoint asks for a second Enter confirmation; blocked endpoints
 cannot be messaged.
 
-The conversation header reports the selected provider's state. Gateway uses
+The conversation header reports the selected instance's state. Connection providers use
 `disconnected`, `connecting`, and `connected`; connectionless MeshCore and Link
 providers use `stopped`, `starting`, `ready`, and `error`.
 
@@ -416,6 +627,15 @@ In-app commands:
 ```text
 /help
 /new contact-id
+/join instance channel
+/query instance nickname
+/leave
+/connect instance
+/disconnect instance
+/remove instance
+/server instance host port nickname
+/sasl instance account password
+/sasl instance off
 /status
 /quit
 ```
@@ -514,7 +734,8 @@ Controls:
 ## webradio
 
 Stream a direct MP3 URL through the default registered audio output. On a
-graphical display shell, WebRadio opens a two-tab media-player GUI. On UART,
+graphical display shell, WebRadio opens a two-tab media-player GUI. The GUI uses compact controls, scrolling channels and fitted edit dialogs on
+small display targets. On UART,
 USB CDC, Telnet, SSH, and other text shells, it opens a station-list TUI.
 
 The catalog is stored as `.solar/webradio/catalog.bin` on the current storage
@@ -541,20 +762,23 @@ as a harmless interface override.
 
 URLs are literal HTTP or HTTPS MP3 stream URLs. WebRadio does not translate
 station names or website addresses and does not discover streams from HTML
-pages. The initial implementation does not support playlists, HLS, or AAC.
+pages. Playlists, HLS, and AAC are unsupported.
 
 Controls:
 
 - `Tab` switches between the Player and Channels tabs in the GUI.
-- The Player tab gives the top two-thirds of the screen to a live PCM
+- The Player tab gives the space above the shared bottom controls to a live PCM
   oscilloscope or spectrum analyzer. `V` switches visualizers. The spectrum
-  analyzer uses the shared DSP service, including PIE SIMD window and FFT paths
-  on eligible ESP32-S3 boards.
+  analyzer shows the frequencies in the playing audio.
 - On the Player tab, `Left` and `Right` play the previous or next catalog
-  channel. The catalog wraps as a ring. Space or `Enter` stops or resumes
-  playback, and `Up`/`Down` changes global volume in five-percent steps.
-- The bottom third of the Player tab shows the channel, playback state, volume
-  bar, and previous, stop/play, and next controls.
+  channel. The catalog wraps as a ring. `Enter` stops playback or reconnects
+  the channel; Space pauses/resumes, and `Up`/`Down` changes global volume in
+  five-percent steps.
+- The bottom controls show the channel name, playback state and elapsed output
+  time above the volume bar, followed by Previous, Stop/Play, and Next buttons.
+  The buttons support clicking or tapping; the middle icon indicates pause
+  while paused. Live-channel pause uses bounded audio buffers; a server may
+  disconnect during a long pause, requiring reconnection.
 - On the Channels tab, `Up`/`Down` selects a channel, `A` adds one, `E` edits
   one, and `Delete` removes one. `Enter` starts the selected channel and returns
   to the Player tab. Add and edit dialogs accept a name followed by a literal
@@ -570,32 +794,19 @@ The app is available on Wi-Fi builds even when the board has no built-in audio
 hardware. Playback starts when a default output device has been registered,
 including an output supplied by a runtime-attached expansion.
 
-Network reception and MP3 decoding feed an app-owned PCM jitter buffer. A
-separate playback worker consumes that buffer at the audio device's steady
-rate. Both workers continue while the resumable WebRadio session is suspended
-or another foreground app is selected. Closing WebRadio cancels the network
-operation through its bounded read timeout, stops both workers, and releases
-the audio device. The network worker exclusively owns the HTTP request during
-that shutdown.
-
-The playback worker, not the decoder, publishes visualizer samples after each
-audio write. The widgets retain only the latest played block and may drop
-intermediate display frames, so buffering does not put the visualization ahead
-of the audio. WebRadio uses 256 scope samples and a 256-point SIMD-eligible FFT,
-grouped into 32 displayed frequency bands.
-
-`service.signal-widgets` provides the reusable thread-safe signed-16-bit
-oscilloscope and spectrum components used by the graphical player. The widgets
-accept mono or interleaved multichannel PCM and own their snapshot storage;
-applications retain ownership of their audio streams.
+Playback continues when you switch sessions. Closing WebRadio stops reception
+and playback and releases the output device. The visualizer follows played
+audio, so it does not run ahead of sound while the stream buffers.
 
 ## help
 
 Foreground browser for the package-aware SolarOS manual. The foldable tree
-groups the topics compiled for the current firmware and shows whether it is
-using the embedded copy or a verified downloaded revision. All groups start
-folded. The selection, scroll position, and fold state remain unchanged after a
-topic closes.
+groups the topics available in the current firmware and shows whether it is
+using the setup and recovery guide or a verified downloaded revision. Full
+guides and scripting API references require the downloaded manual; use
+`help update` to install it on devices with Wi-Fi, PSRAM, and SD storage.
+All groups start folded. The selection, scroll position, and fold state remain
+unchanged after a topic closes.
 
 Usage:
 
@@ -639,7 +850,8 @@ Controls:
 - `Ctrl+F` or `F3` opens Find. Matches are case-insensitive and wrap at the end
   of the file.
 - `Ctrl+S` or `F2` saves in place. `Ctrl+Q`, `Esc`, `F10`, or the app-exit key
-  exits without saving pending changes.
+  exits. When the file has pending changes, answer `Y` to save and exit or `N`
+  to discard the changes and exit.
 - `Ctrl++` and `Ctrl+-` adjust editor text size for the active session.
 
 ## hexedit
@@ -738,11 +950,14 @@ directory the startup menu, add a line such as this to `/.shell/startup`:
 files --launcher /apps
 ```
 
-File associations come from the installed app registry. Only apps compiled in
-the active firmware can be selected. Associations include images to `view`,
-WAV/MP3 to `player`, CSV to `sheet`, Python and Lua scripts to their runtimes,
+File associations come from the app registry, including installed external
+foreground apps. Associations include images to `view`,
+WAV/MP3 to `player`, MPEG-1 `.mpg`/`.mpeg` files to `vplay`, CSV to `sheet`,
+Python and Lua scripts to their runtimes,
 documents to `reader` (or `writer` when Reader is unavailable), and `.gb` ROMs
-to `gameboy`. Unknown files fall back to `less` or `edit`. A `.sh` file runs
+to the installed [Game Boy module](app.gameboy.md). NIB disk images open with
+the installed [Apple II Plus module](app.apple2.md). Unknown files fall back to
+`less` or `edit`. A `.sh` file runs
 through the built-in SolarOS shell. In launcher mode, documents associated with
 Reader open as `reader --pager` for row-aware page navigation.
 
@@ -753,7 +968,13 @@ Controls:
 - `Enter` opens directories or launches known files.
 - Returning to a parent directory restores the cursor to the directory that
   was just exited.
-- `F5`, `F6`, and `F8` copy, move, and delete the current or marked entries.
+- `F3`/`V`, `F4`/`E`, `F5`/`C`, `F6`/`M`, `F7`/`k`/`K`, `F8`/`D`, and `F9`/`Z`
+  view, edit, copy, move, create a directory, delete, and create a zip archive.
+  The function keys remain the primary map; the help bar shows the letter
+  mnemonics within the action names.
+- `Space` toggles a mark on the current file or directory and advances to the
+  next item.
+- Copy, move, and delete operate on the current or marked entries.
   Copy and recursive delete scan their source trees first, then show measured
   progress with the current entry. Move shows progress across the selected
   top-level entries.
@@ -772,37 +993,101 @@ connections.
 Usage:
 
 ```text
+ftp
 ftp HOST [PORT] [--user USER --password PASSWORD] [--remote PATH] [--local PATH]
 ```
+
+Press Tab after a host prefix to complete aliases from `.ssh/hosts` on the
+default storage.
 
 Anonymous login is the default (`anonymous` with `solaros@` as its password).
 Specify both `--user` and `--password` for an authenticated server. Passwords
 are plaintext on the network and remain in shell history when entered on the
-command line. Use FTP only on a trusted network.
+command line. Use FTP only on a trusted network. Starting without arguments
+opens the disconnected file manager; `F2`/`n` opens the connection form. The
+command-line form remains available as a direct connection shortcut. If login
+is rejected, FTP reopens the form on the password field with the entered host,
+port, user, remote path, and masked password preserved. Connection failures are
+reported as refused, timed out, host unreachable, or network unreachable when
+the socket supplies that distinction, and as server unavailable otherwise.
 
 Controls:
 
-- Arrows navigate the active pane. `Tab`, Left, and Right switch panes.
-- `Enter` opens a directory. `r` refreshes the remote and local listings.
-- `F3` views a local file. For a remote file, FTP downloads a temporary hidden
+- Up/Down selects an item. `PgUp`/`PgDn` moves by one visible page, and
+  Home/End selects the first/last item. `Tab`, Left, and Right switch panes.
+- `Space` toggles a mark on the current file or directory and advances to the
+  next item, as in Files. Marked items show `*`; each pane shows its mark count.
+  Copy, move, and delete use the active pane's marked items, or the current
+  item when none are marked. The parent entry cannot be marked.
+- `F2`/`n` opens the connection form. `Tab` or Up/Down selects a field, Enter
+  connects, and Esc cancels the form.
+- `Enter` opens a directory; Backspace opens its parent. `r` refreshes the
+  remote and local listings. `h` toggles hidden files and directories in both
+  panes. Hidden items are shown initially; the title shows `hidden:on` or
+  `hidden:off`.
+- `F3`/`V` views a local file. For a remote file, FTP downloads a temporary hidden
   copy into the current local folder, opens its registered viewer, and removes
   the copy when control returns to FTP.
-- `F5` copies the current file or directory to the other pane. Directory
-  transfers are recursive. Copy and move show the same preparing/transfer
+- `F5`/`C` copies the current or marked files and directories to the other pane.
+  Directory transfers are recursive. Copy and move show the same preparing/transfer
   progress popup used by Files.
-- `F6` moves the current file or directory to the other pane by completing the
-  copy before deleting the source.
-- `F7` creates a directory in the active pane.
-- `F8` recursively deletes the current item after confirmation.
+- `F6`/`M` moves the current or marked files and directories to the other pane by
+  completing each item's copy before deleting its source.
+- `F7`/`k`/`K` creates a directory in the active pane.
+- `F8`/`D` recursively deletes the current or marked items after confirmation.
+  The help bar emphasizes the same operation mnemonics used by Files and SFTP.
 - `q`, `F10`, or the app-exit key closes the connection and exits.
 - After an operation refreshes the current directories, both panes retain their
   cursor and scroll positions. Opening another directory starts at its top.
+  Marks survive refreshes in the same directory and pane switching. Opening
+  another directory clears that pane's marks; hiding hidden items clears their
+  marks. Completed items are unmarked. A failure stops the batch and leaves
+  remaining items marked.
 
 FTP is a resumable TUI on the display shell and VT100-compatible port shells.
 One operation runs at a time in its foreground worker. Existing destination
 files are replaced. A failed download removes its staging file and preserves an
 existing destination; a move does not delete its source unless the complete
 copy succeeds.
+
+## sftp
+
+Two-pane SFTP file manager with the same panes, file operations, progress, and
+key bindings as `ftp`. The left pane is local mounted storage and the right
+pane is a remote SSH server's SFTP subsystem. It uses the shared SSH transport,
+known-host policy, host aliases, and password or public-key authentication.
+
+Usage:
+
+```text
+sftp
+sftp [user@]HOST[:PATH] [PORT] [--user USER] [--password PASSWORD] [--remote PATH] [--local PATH]
+```
+
+Press Tab after a host prefix to complete aliases from `.ssh/hosts` on the
+default storage. Completion preserves a supplied `user@` prefix.
+
+Starting without arguments opens the disconnected file manager. Press `F2`/`n`
+to enter the host, port, user, optional password, and initial remote path. Leave
+the password empty to use the configured SSH key. When `user@` and `--user` are
+omitted from the command-line shortcut, SFTP uses the SolarOS identity user. A
+remote path can be appended to the host, for example
+`sftp nils@remote:/directory`; this form connects immediately and opens that
+directory. `--remote PATH` overrides an appended path. A command-line password
+remains in shell history; the connection form masks it. The active form field
+keeps a visible text cursor. If passwordless key authentication fails, SFTP
+reopens the form on the password field instead of showing a low-level error.
+
+Controls are identical to FTP: `F2`/`n` opens connection setup; `F3`/`V` views,
+`F5`/`C` copies, `F6`/`M` moves, `F7`/`k`/`K` creates a directory, and `F8`/`D`
+deletes after confirmation. `PgUp`/`PgDn` moves by one visible page, Backspace
+opens the parent directory, and `h` toggles hidden files and directories in both
+panes. `Space` marks or unmarks files and directories and advances the cursor,
+as in Files. Copy, move, and delete operate on marked items in the active pane,
+or the current item if none are marked. Transfers are recursive, show progress,
+retain both pane positions after refresh, and stage downloaded and uploaded
+files before replacement. `q`, `F10`, or the app-exit key closes the
+SSH connection and exits.
 
 ## flash
 
@@ -840,9 +1125,27 @@ contacts
 
 The list is grouped by trust and provider. Press `/` to search, `Enter` to view
 the selected endpoint addresses, capabilities, last-seen times, and bounded
-provider metadata summary, and `Esc` or `q` to leave.
+provider metadata summary, and `Esc` or `q` to leave. The footer shows
+`a Actions` and `? Help`, including on compact screens.
 
-Use the shell surface for mutations:
+Press `a` in the list or details to manage the selected contact:
+
+- `t`: trust all endpoints or choose one endpoint.
+- `b`: block all endpoints or choose one endpoint.
+- `r`: edit the contact name, then `Enter` to save or `Esc` to cancel.
+- `l`: choose another contact to link into the selected contact. Confirm with
+  `y` to move its endpoints and remove its source record.
+- `d`: remove the contact and its endpoints after confirming with `y`.
+
+These shortcuts also work directly from the list and details. Use arrows and
+`Enter` in menus, and `Esc` to cancel. Confirmation pages require `y`;
+`Enter` does not confirm removal or linking. Press `f` in the list to filter
+by endpoint trust (`all`, `discovered`, `trusted`, or `blocked`), and `s` for
+store status. `?` opens a scrollable key guide. Filters match contacts with any
+endpoint in that trust state; linking can select any other contact regardless
+of the current filter or name search.
+
+The same operations are available from the shell:
 
 ```text
 contacts status
@@ -857,12 +1160,14 @@ contacts link TARGET_CONTACT_ID SOURCE_CONTACT_ID
 
 Contact and endpoint identifiers autocomplete from live service snapshots.
 Linking moves the source endpoints to the target contact and removes the source
-record. When the 64-contact store is full, SolarOS may evict the oldest
+record. When the 512-contact store is full, radio discovery may evict the oldest
 unpinned contact whose endpoints are all still discovered; trusted and blocked
 records are never automatically evicted.
+BLE companion imports preserve existing records and report overflow instead
+of evicting contacts. The shared store supports up to 576 endpoints.
 
 The versioned store is CRC checked, uses two alternating headers and data
-copies, remains below 24 KiB, and normally lives at
+copies, remains below 192 KiB, and normally lives at
 `/.contacts/contacts.bin`. If storage is unavailable, Contacts remains usable
 in volatile mode and `contacts status` reports the storage error.
 
@@ -950,7 +1255,10 @@ Controls:
   in the other views. Page Up/Page Down, Home, and End make larger moves.
 - Layout adapts to the terminal: compact headers show several pins across,
   while long headers such as the DevKitC J1/J3 pair scroll vertically with one
-  physical pin pair per row.
+  physical pin pair per row. Narrow screens show fewer columns and keep the
+  selected pin visible.
+- Pins, Buses, and Claims fit their columns to the screen width. Bus state stays
+  ahead of routing details; trailing columns are omitted when space is limited.
 - Layout markers are `*` free, `~` releasable, `@` claimed, `!` fixed/control,
   `+` power, `-` ground, and `x` not connected.
 - `Enter` opens context-sensitive actions for a pin or bus.
@@ -967,7 +1275,9 @@ Controls:
 
 ## invaders
 
-Graphical arcade shooter.
+Graphical arcade shooter. The playfield scales to the active display;
+ship movement, shields and collision detection use the same game coordinates.
+Small displays use bitmap text for the score and lives.
 
 Usage:
 
@@ -980,59 +1290,6 @@ Controls:
 - `Left`/`Right` move the ship.
 - `Space` or `f` fires.
 - `Esc` or app-exit key exits.
-
-## gameboy
-
-Original Game Boy (DMG) emulator selected by the `gameboy` group on boards with
-PSRAM, SD storage, graphics, and a streaming display. Current integrated
-targets are Waveshare RLCD, Freenove IPS, ODROID-GO, Freenove PAL, and TTGO
-VGA32. The application loads a user-supplied ROM into PSRAM and writes
-battery-backed cartridge RAM beside it as a `.sav` file. Game Boy Color-only
-ROMs and ROMs larger than 4 MiB are rejected.
-
-The emulator runs Peanut-GB at its fixed native frame frequency in a dedicated
-worker. Peanut-GB renders alternate LCD frames, producing a compact 160x144
-INDEX2 raster at about 30 frames per second while still emulating every frame.
-A shared frame presenter owns display cadence, retains the newest submitted
-frame, and replaces stale pending frames instead of blocking emulation. TFT
-targets scale the four-color raster directly to RGB565. One-bit targets convert
-the latest frame through ordered dithering, then use their scan-synchronized
-mono path. The target selects a bounded presentation rate of 25 or 30 frames
-per second and reduces output scale when the driver's pixel-rate budget cannot
-sustain the larger raster. Runtime logs report emulation, presentation,
-replacement, timing rebase, audio block, peak level, and transfer timing.
-
-Audio rendering runs in its own bounded worker, applies a Game Boy-local
-bounded gain for low-resolution DAC outputs, and holds exclusive speaker output
-while Game Boy is active. The Waveshare presenter temporarily requests
-the panel's 25.5 Hz HPM profile. Pausing, suspending, or exiting stops the
-workers and restores the previous display and audio policies. PAL builds run
-without audio because composite scanout owns I2S0; both the 384x288 raster and
-the centered 320x200 safe-area mode can fit the scaled Game Boy frame.
-
-Usage:
-
-```text
-gameboy <file.gb>
-```
-
-Controls:
-
-- Arrows control the D-pad.
-- The physical US-Z key position is A; on a German QWERTZ keyboard this key is
-  labeled `Y`. The physical X key is B.
-- `Enter` is Start; `Backspace` or `Delete` is Select.
-- On ODROID-GO, A and B are the Game Boy A and B buttons, Menu is Start,
-  Select is Select, and Menu+Select exits.
-- `p` pauses and `r` resets.
-- `q`, `Esc`, or the app-exit key exits.
-
-Game Boy reads the generic SolarOS held-key state. BLE/PS/2 keyboards, fixed board
-buttons, `gpio-keys`, and ADC D-pads therefore remain active until
-release, and combinations such as diagonal movement or direction plus A/B work
-simultaneously. USB HID usages preserve the physical Z/X positions across
-keyboard layouts. Character-only inputs such as port-shell input retain the
-short button-pulse fallback. Analog joystick axes do not become Game Boy keys.
 
 ## less
 
@@ -1053,6 +1310,41 @@ Controls:
 - `Ctrl+F` or `/` opens Find. `F3` or `n` jumps to the next
   case-insensitive match; `N` jumps to the previous match. Search wraps.
 - `q`, `Esc`, or app-exit key exits.
+
+## ltop
+
+Live text task monitor for display and port terminals. Unlike the `top`
+command's cumulative snapshot, `ltop` samples the FreeRTOS runtime counters
+once per second and reports the interval deltas. One progress bar shows the
+busy share of each CPU core, derived from that core's idle-task delta. Each
+task percentage is its share of one core, so the task total can approach 200%
+on a dual-core target. The title shows the current aggregate CPU load instead
+of the fixed maximum capacity.
+
+The IRAM and ERAM progress bars show the currently used share of the internal
+and external heaps. ERAM is shown as unavailable on boards without external
+RAM.
+
+The task table is sorted by current CPU load and shows task state, priority,
+interval CPU percentage, and peak stack consumption since the task started.
+Peak stack consumption is the allocated stack size minus the minimum remaining
+stack reported by FreeRTOS. Idle tasks are omitted from the table because their
+counters drive the per-core progress bars. Columns expand across wide terminals
+and the priority column is hidden on narrow terminals.
+
+Usage:
+
+```text
+ltop
+```
+
+Controls:
+
+- `Up`/`Down` or `j`/`k` scroll one row.
+- `Page Up`/`Page Down`, `Home`/`End`, or `g`/`G` move through the
+  task list.
+- `r` resets the sampling baseline.
+- `q`, `Esc`, or the app-exit key exits.
 
 ## logic
 
@@ -1350,6 +1642,34 @@ Controls:
 
 - App-exit key cancels an active transfer.
 
+## sftpsync
+
+Incremental file and directory synchronization over SSH. The SolarOS client
+uses the server's SFTP subsystem, so it works with a normal SSH server without
+requiring a matching remote program. It skips regular files whose size and
+modification time already match. It does not delete destination-only files.
+
+Usage:
+
+```text
+sftpsync [-r|-a] [-n] [-P port] local [user@]host:remote
+sftpsync [-r|-a] [-n] [-P port] [user@]host:remote local
+```
+
+`-r`, `-a`, or `--recursive` enables directory traversal. `-n` or `--dry-run`
+prints the changes without writing them. `-P` selects a non-default SSH port.
+Password and key authentication, known hosts, and aliases in `/.ssh/hosts` are
+shared with `ssh` and `scp`. A local or remote directory operand names the
+directory to synchronize; its contents are updated below that path. Traversal
+is limited to eight nested directory levels. Symbolic links and other special
+file types are skipped. Active transfers show an updating progress bar for each
+changed file, followed by the aggregate file and byte counts.
+
+Controls:
+
+- `Ctrl+C` or the app-exit key cancels the password prompt or an active
+  synchronization.
+
 ## sheet
 
 CSV viewer for small data tables. It is intended as a companion to `daq` logs
@@ -1528,6 +1848,9 @@ telnet host [port]
 telnet -r host [port]
 ```
 
+Press Tab after a host prefix to complete aliases from `.ssh/hosts` on the
+default storage, including in raw mode.
+
 Controls:
 
 - App-exit key closes the Telnet app.
@@ -1556,6 +1879,56 @@ Controls:
 - `1` selects fit-to-screen.
 - `Esc` or app-exit key exits.
 
+## vplay
+
+Graphical MPEG-1 media player with optional MP2 audio.
+The bottom controls show playback status and elapsed time above the volume bar;
+full screen hides the controls and time. The middle Stop/Play icon indicates
+pause while paused.
+
+The viewport and controls adapt to small targets, including 240×64 displays.
+Full screen uses the entire display for video. The minimum target size is
+84×48 pixels.
+
+Usage:
+
+```text
+vplay [-fit|-actual] <file.mpg>
+```
+
+Supports MPEG-1 program streams (`.mpg` and `.mpeg`) containing
+one MPEG-1 video track and optionally one MPEG-1 Layer II (MP2) audio track.
+MPEG-2, MPEG-4/H.264, AVI, transport streams, and MP3/AAC audio are not supported.
+The source limit is 640x480; lower resolutions and frame rates are recommended
+for smooth playback. Playback speed depends on
+source complexity, display transfer speed, and output size.
+
+Controls:
+
+- `Space` pauses/resumes.
+- `Up`/`Down` changes global volume.
+- `Enter` stops playback or restarts the selected file.
+- `<`/`>` seeks backward/forward ten seconds, preserving pause state.
+- `Left`/`Right` selects the previous/next MPEG file in the same folder, in
+  filename order. At either end, the selection stays unchanged.
+- The shared Previous, Rewind, Stop/Play, Forward, and Next buttons provide
+  the same actions when clicked or tapped.
+- `f` toggles full screen, hiding the header, volume strip, and transport buttons.
+- `0` selects actual size and `1` selects fit.
+  Actual-size video larger than the viewport is cropped centrally.
+- `d` toggles frame/timing log diagnostics.
+- `Esc` or app-exit key exits.
+
+Playback pauses while its session is suspended and returns to the shell at the
+end of the file. Audio uses the selected SolarOS output and acts as the playback
+clock when present; a file with audio requires an available playback output.
+Video dimensions and frame rate must remain constant, and the initial audio/video
+timestamp difference must be no more than ten seconds.
+
+`SEEKING` means the player is preparing a new position. Files without usable
+seek timestamps take longer. Stop or close playback to cancel. Positions beyond
+the end select the last frame.
+
 ## sketch
 
 Pointer-driven graphical paint application. Its layout follows classic desktop
@@ -1572,6 +1945,9 @@ sketch
 sketch file.png
 ```
 
+Sketch requires at least 200×200 pixels. On smaller targets it reports that
+the display resolution is too low and returns to the shell.
+
 Sketch is intentionally not gated on a pointer hardware capability. If no ready
 absolute or relative pointer is registered when the app starts, a popup explains
 that a pointer can be attached at any time. Press Enter or Esc to dismiss it;
@@ -1581,8 +1957,7 @@ Controls:
 
 - Click Save to update the current PNG. For an untitled or imported image, the
   first save selects the next free `Sketches/sketchNNN.png` path on persistent
-  storage. Saves use a synced staging file, backup rename, atomic replacement,
-  and rollback.
+  storage. A failed save preserves the previous document.
 - Click Open to select a PNG as the current document. Click Import to flatten a
   PNG, JPEG, or GIF into the current four-color canvas; the next save creates a
   new PNG instead of overwriting the imported source.
@@ -1607,14 +1982,23 @@ Controls:
 Simple graphical web browser for lightweight HTML pages. It shares document and
 image rendering infrastructure with `reader` where possible. Embedded and
 direct PNG, JPEG, GIF, and WebP images retain color on indexed-color displays;
-one-bit displays keep the grayscale decode and dither path.
+one-bit displays keep the grayscale decode and dither path. Direct MJPEG URLs
+are shown as live video using the same JPEG renderer.
 
 Usage:
 
 ```text
 web http://host/
 web https://host/path
+web http://camera-host/camera.mjpeg
 ```
+
+MJPEG playback uses a bounded 512 KiB assembly buffer and a single pending
+decoded frame. If decoding or display presentation falls behind the source,
+`web` drops the stale pending frame and keeps the newest one instead of growing
+latency or memory use. Reload, Back, Forward, and app exit cancel the active
+HTTP stream. The stream inherits the security properties of its URL; plain
+HTTP provides no encryption or peer authentication.
 
 Controls:
 
@@ -1632,6 +2016,49 @@ Controls:
 - `Ctrl+F` opens Find and `F3` jumps to the next case-insensitive match in
   rendered page text, wrapping at the end.
 - `Esc` or app-exit key exits.
+
+## zoo
+
+Browse the hosted model zoo and install complete model bundles on mounted SD
+or flash storage. The text interface works on the display and VT100 port shells.
+It requires the Zoo package, ESP32-S3, PSRAM, and networking.
+
+```text
+zoo
+zoo refresh
+zoo source [HTTPS-CATALOG-URL|reset]
+zoo storage [sd|flash]
+zoo install ID VERSION
+```
+
+The default source is `https://solar-os.eu/zoo/catalog.json`. The first launch
+fetches it; later launches use the cached catalog. `r` refreshes the cache.
+Up/Down and Page Up/Page Down select entries, Enter opens details, Alt+S searches,
+and `d` downloads the selected version. Arrows and page keys scroll long details.
+`*` marks an installed bundle and `!`
+marks an incompatible entry. `c` or Esc cancels a running operation. `q` or Esc returns
+from details or exits the browser; the app-exit key exits from either view.
+
+Source and storage preferences persist. Without an explicit storage preference,
+Zoo uses mounted SD, then flash. Files are stored under `dl/zoo/` on that volume;
+each installed bundle is in `models/ID/VERSION/`. Downloads are streamed to storage,
+checked against archive, manifest, model, and asset hashes, and installed through
+a staged directory swap. Interrupted downloads preserve the previous installation.
+
+The browser shows task, modality, result adapter, license, validation status, and
+reported free-memory requirements. Runtime compatibility is not a
+device inference test, and unreported memory remains unknown. The device accepts
+catalogs up to 512 KiB and 256 entries; larger catalogs fail without replacing the
+cache. Installation also needs enough storage for the ZIP and extracted files.
+
+Installation does not load a model. Use the displayed `bundle.json` path with
+`model bundle PATH` or the native, Python, or Lua inference APIs. Loaded models
+remain resident until explicitly unloaded or the device reboots. See
+[Model bundles](model-bundles.md) for inputs, results, and execution, and
+[Native image pipelines](pipelines.md#install-a-model-and-process-the-local-camera)
+for a Zoo-to-camera workflow and a Python detection example. Catalog task
+names describe the model; check its result adapter before selecting a script.
+Raw tensor bundles need model-specific interpretation.
 
 ## Quick reference
 

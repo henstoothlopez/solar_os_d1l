@@ -11,6 +11,15 @@ void solar_os_shell_cmd_adc(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_dpad(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_audio(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_battery(solar_os_context_t *ctx, int argc, char **argv);
+#if SOLAR_OS_PACKAGE_SERVICE_CAMERA
+void solar_os_shell_cmd_camera(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_INFERENCE
+void solar_os_shell_cmd_model(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_PIPELINE
+void solar_os_shell_cmd_pipeline(solar_os_context_t *ctx, int argc, char **argv);
+#endif
 void solar_os_shell_cmd_ble(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_board(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_clear(solar_os_context_t *ctx, int argc, char **argv);
@@ -19,11 +28,17 @@ void solar_os_shell_cmd_ls(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_cat(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_daq(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_date(solar_os_context_t *ctx, int argc, char **argv);
+void solar_os_shell_cmd_deepsleep(solar_os_context_t *ctx, int argc, char **argv);
+void solar_os_shell_cmd_shutdown(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_df(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_display(solar_os_context_t *ctx, int argc, char **argv);
+void solar_os_shell_cmd_dlp(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_help(solar_os_context_t *ctx, int argc, char **argv);
 #if SOLAR_OS_PACKAGE_APP_EMAIL
 void solar_os_shell_cmd_email(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_APP_RTSP
+void solar_os_shell_cmd_rtsp_auth(solar_os_context_t *ctx, int argc, char **argv);
 #endif
 #if SOLAR_OS_PACKAGE_APP_CONTACTS
 void solar_os_shell_cmd_contacts(solar_os_context_t *ctx, int argc, char **argv);
@@ -44,14 +59,37 @@ void solar_os_shell_cmd_engine(solar_os_context_t *ctx, int argc, char **argv);
 #if SOLAR_OS_PACKAGE_SERVICE_EXPANSION
 void solar_os_shell_cmd_expansion(solar_os_context_t *ctx, int argc, char **argv);
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_GNSS
+void solar_os_shell_cmd_gnss(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_HAPTIC
+void solar_os_shell_cmd_haptic(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_MOTOR
+void solar_os_shell_cmd_motor(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_ENCODER
+void solar_os_shell_cmd_encoder(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_CHARGER
+void solar_os_shell_cmd_charger(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_IMU
+void solar_os_shell_cmd_imu(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_NFC
+void solar_os_shell_cmd_nfc(solar_os_context_t *ctx, int argc, char **argv);
+#endif
 void solar_os_shell_cmd_gpio(solar_os_context_t *ctx, int argc, char **argv);
 #if SOLAR_OS_PACKAGE_SERVICE_GATEWAY
+void solar_os_shell_cmd_irc(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_gateway(solar_os_context_t *ctx, int argc, char **argv);
 #endif
 void solar_os_shell_cmd_humidity(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_i2c(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_identity(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_input(solar_os_context_t *ctx, int argc, char **argv);
+void solar_os_shell_cmd_gesture(solar_os_context_t *ctx, int argc, char **argv);
 #if SOLAR_OS_PACKAGE_APP_INBOX
 void solar_os_shell_cmd_inbox(solar_os_context_t *ctx, int argc, char **argv);
 #endif
@@ -59,10 +97,20 @@ void solar_os_shell_cmd_led(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_job(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_jobs(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_log(solar_os_context_t *ctx, int argc, char **argv);
+#if SOLAR_OS_PACKAGE_SERVICE_NATIVE_MODULES
+void solar_os_shell_cmd_load(solar_os_context_t *ctx, int argc, char **argv);
+bool solar_os_shell_try_native_module(solar_os_context_t *ctx,
+                                      int argc,
+                                      char **argv,
+                                      bool *matched);
+#endif
 void solar_os_shell_cmd_man(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_mem(solar_os_context_t *ctx, int argc, char **argv);
 #if SOLAR_OS_PACKAGE_JOB_MIDI
 void solar_os_shell_cmd_midi(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_MODEM
+void solar_os_shell_cmd_modem(solar_os_context_t *ctx, int argc, char **argv);
 #endif
 void solar_os_shell_cmd_mkdir(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_rm(solar_os_context_t *ctx, int argc, char **argv);
@@ -70,6 +118,9 @@ void solar_os_shell_cmd_mv(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_cp(solar_os_context_t *ctx, int argc, char **argv);
 #if SOLAR_OS_PACKAGE_SERVICE_MQTT
 void solar_os_shell_cmd_mqtt(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_NETWORK
+void solar_os_shell_cmd_network(solar_os_context_t *ctx, int argc, char **argv);
 #endif
 #if SOLAR_OS_PACKAGE_EXPANSION_NEOPIXEL
 void solar_os_shell_cmd_neopixel(solar_os_context_t *ctx, int argc, char **argv);
@@ -93,8 +144,18 @@ void solar_os_shell_cmd_pkg(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_port(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_power(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_pwm(solar_os_context_t *ctx, int argc, char **argv);
+void solar_os_shell_cmd_servo(solar_os_context_t *ctx, int argc, char **argv);
 #if SOLAR_OS_PACKAGE_SERVICE_RADIO
 void solar_os_shell_cmd_radio(solar_os_context_t *ctx, int argc, char **argv);
+#endif
+#if SOLAR_OS_PACKAGE_JOB_SPEECHD
+void solar_os_shell_cmd_say(solar_os_context_t *ctx, int argc, char **argv);
+bool solar_os_shell_speech_file_event(solar_os_context_t *ctx,
+                                      const solar_os_event_t *event);
+bool solar_os_shell_speech_file_active(
+    const solar_os_shell_session_t *session);
+void solar_os_shell_speech_file_session_destroyed(
+    const solar_os_shell_session_t *session);
 #endif
 void solar_os_shell_cmd_rtc(solar_os_context_t *ctx, int argc, char **argv);
 void solar_os_shell_cmd_schedule(solar_os_context_t *ctx, int argc, char **argv);

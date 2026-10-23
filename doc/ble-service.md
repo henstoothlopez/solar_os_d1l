@@ -5,6 +5,25 @@ handles, scan results, characteristic properties, discovery/value types, and
 shared initialization and sleep/resume entry points. Bluetooth host-stack types
 are confined to the backend.
 
+Native byte streams use `solar_os_ble_stream.h` and the common exclusive stream
+API. Their private CoC adapter shares this host, connection budget, peripheral
+lease, and sleep/reset lifecycle. A stream claim owns its BLE session; releasing
+it retires the channel and connection. The adapter copies received SDUs into a
+bounded byte queue and grants another credit only when a complete SDU fits.
+Bulk data bypasses the GATT notification/event queues. Stack calls run on the
+shared host queue and callbacks never invoke application or interpreter code.
+See [BLE byte streams](manual/commands.md#ble-byte-streams) for connection roles
+and commands.
+
+The stream service UUID is `569a2001-b87f-490c-92cb-11ba5ea5167c`.
+Its read-only descriptor characteristic UUID is
+`569a2002-b87f-490c-92cb-11ba5ea5167c`. The five descriptor bytes are version
+`1`, PSM `0x0080` as a little-endian uint16, then the receive SDU MTU as a
+little-endian uint16. A central discovers and checks this descriptor before
+opening the CoC channel. The PSM is registered once per host lifetime; inactive
+or already occupied listeners refuse incoming channel requests. Stream
+configuration never grants another app access to an existing connection.
+
 ## Ownership and lifetime
 
 `solar_os_ble_session_create(owner, &session)` allocates an opaque, nonzero
@@ -108,7 +127,8 @@ at the transport boundary.
 `solar_os_ble_hid.c` is SolarOS's bounded HID-over-GATT client; it does not use
 ESP-IDF's HID host transport. Its asynchronous setup authenticates/encrypts,
 negotiates MTU, discovers HID/battery services, reads report maps/references,
-and subscribes to keyboard input and battery CCCDs. A bounded report-map
+subscribes to keyboard input and battery CCCDs, and reads the initial Battery
+Level when the characteristic permits it. A bounded report-map
 classifier identifies keyboard input IDs; the existing SolarOS key-report
 decoder still interprets their payloads.
 
@@ -180,6 +200,11 @@ enable NimBLE, peripheral support, and the GATT server, and disable Bluedroid.
   `solaros.ble.read()` still reads decoded keyboard input.
   Peripheral operations use `solaros.ble.server`. Notifications and indications
   use the per-peer polling interface described below.
+- `solaros.ble.hid` uses that same runtime-owned peripheral lease but publishes
+  a native, fixed HID-over-GATT service. The OS owns encrypted characteristics,
+  Report Reference descriptors, pairing/bonding, typed keyboard/mouse/gamepad
+  report state, and neutral-report teardown. It accepts one remote host and
+  exposes only copied status and events to Python or Lua.
 - `service.ble` selects the service, adapter, and keyboard profile under the
   existing package and board capability gates.
 

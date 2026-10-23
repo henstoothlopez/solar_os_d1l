@@ -79,6 +79,11 @@ typedef struct {
 } solar_os_job_inspection_t;
 
 esp_err_t solar_os_jobs_init(void);
+esp_err_t solar_os_jobs_register_dynamic(const char *name,
+                                         const char *summary,
+                                         const solar_os_job_t *job);
+esp_err_t solar_os_jobs_unregister_dynamic(const char *name,
+                                           const solar_os_job_t *job);
 size_t solar_os_jobs_count(void);
 bool solar_os_jobs_get(size_t index, solar_os_job_status_t *status);
 bool solar_os_jobs_get_by_name(const char *name, solar_os_job_status_t *status);
@@ -90,6 +95,7 @@ bool solar_os_jobs_inspect_by_name(
     solar_os_job_inspection_t *inspection);
 esp_err_t solar_os_jobs_start(solar_os_context_t *ctx, const char *name, int argc, char **argv);
 esp_err_t solar_os_jobs_stop(solar_os_context_t *ctx, const char *name);
+esp_err_t solar_os_jobs_prepare_shutdown(solar_os_context_t *ctx);
 /* Capture during start; asynchronous completion must present the same generation. */
 esp_err_t solar_os_jobs_get_generation(const char *name, uint32_t *generation);
 esp_err_t solar_os_jobs_mark_stopped(const char *name,

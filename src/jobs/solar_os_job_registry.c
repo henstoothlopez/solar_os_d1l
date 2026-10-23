@@ -4,11 +4,17 @@
 #include <string.h>
 
 #include "solar_os_config.h"
+#if SOLAR_OS_PACKAGE_JOB_POINTER_ARROWS
+#include "solar_os_pointer_arrows_job.h"
+#endif
 #if SOLAR_OS_PACKAGE_JOB_BATMON
 #include "solar_os_batmon_job.h"
 #endif
 #if SOLAR_OS_PACKAGE_JOB_BRIDGE
 #include "solar_os_bridge_job.h"
+#endif
+#if SOLAR_OS_PACKAGE_JOB_CAM_WEBD
+#include "solar_os_cam_webd_job.h"
 #endif
 #if SOLAR_OS_PACKAGE_JOB_CONTROLS
 #include "solar_os_controls_job.h"
@@ -28,11 +34,17 @@
 #if SOLAR_OS_PACKAGE_JOB_HTTPD
 #include "solar_os_httpd_job.h"
 #endif
+#if SOLAR_OS_PACKAGE_JOB_GESTURE_LISTENER
+#include "solar_os_gesture_listener_job.h"
+#endif
 #if SOLAR_OS_PACKAGE_JOB_FTPD
 #include "solar_os_ftpd_job.h"
 #endif
 #if SOLAR_OS_PACKAGE_JOB_CHATD
 #include "solar_os_chatd_job.h"
+#endif
+#if SOLAR_OS_PACKAGE_JOB_IRC_SYNC
+#include "solar_os_irc_sync_job.h"
 #endif
 #if SOLAR_OS_PACKAGE_JOB_GATEWAY_SYNC
 #include "solar_os_gateway_sync_job.h"
@@ -40,14 +52,23 @@
 #if SOLAR_OS_PACKAGE_JOB_GPIO_KEYS
 #include "solar_os_gpio_keys_job.h"
 #endif
+#if SOLAR_OS_PACKAGE_JOB_GRAFFITI
+#include "solar_os_graffiti_job.h"
+#endif
 #if SOLAR_OS_PACKAGE_JOB_LOG
 #include "solar_os_log_job.h"
+#endif
+#if SOLAR_OS_PACKAGE_JOB_RTSPD
+#include "solar_os_rtspd_job.h"
 #endif
 #if SOLAR_OS_PACKAGE_JOB_MIDI
 #include "solar_os_midi_job.h"
 #endif
 #if SOLAR_OS_PACKAGE_JOB_MESHCORE
 #include "solar_os_meshcore_job.h"
+#endif
+#if SOLAR_OS_PACKAGE_JOB_MESHCORE_BLE
+#include "solar_os_meshcore_ble_job.h"
 #endif
 #if SOLAR_OS_PACKAGE_JOB_NTP_SYNC
 #include "solar_os_ntp_sync_job.h"
@@ -58,6 +79,9 @@
 #if SOLAR_OS_PACKAGE_JOB_POCSAG
 #include "solar_os_pocsag_job.h"
 #endif
+#if SOLAR_OS_PACKAGE_JOB_PPPD
+#include "solar_os_pppd_job.h"
+#endif
 #if SOLAR_OS_PACKAGE_JOB_PS2_KEYBOARD
 #include "solar_os_ps2_keyboard_job.h"
 #endif
@@ -67,6 +91,9 @@
 #if SOLAR_OS_PACKAGE_JOB_SLIP
 #include "solar_os_slip_job.h"
 #endif
+#if SOLAR_OS_PACKAGE_JOB_SPEECHD
+#include "solar_os_speechd_job.h"
+#endif
 #if SOLAR_OS_PACKAGE_JOB_SUMP
 #include "solar_os_sump_job.h"
 #endif
@@ -75,11 +102,17 @@
 #endif
 
 static const solar_os_job_registry_entry_t registered_jobs[] = {
+#if SOLAR_OS_PACKAGE_JOB_POINTER_ARROWS
+    {"pointer-arrows", "hold arrow keys while a pointer moves", &solar_os_pointer_arrows_job},
+#endif
 #if SOLAR_OS_PACKAGE_JOB_BATMON
     {"batmon", "battery voltage trend monitor", &solar_os_batmon_job},
 #endif
 #if SOLAR_OS_PACKAGE_JOB_BRIDGE
     {"bridge", "bidirectional port and Link bridge", &solar_os_bridge_job},
+#endif
+#if SOLAR_OS_PACKAGE_JOB_CAM_WEBD
+    {"cam-webd", "HTTP camera stream", &solar_os_cam_webd_job},
 #endif
 #if SOLAR_OS_PACKAGE_JOB_CONTROLS
     {"controls", "map scalar streams to parameters and MIDI", &solar_os_controls_job},
@@ -99,11 +132,17 @@ static const solar_os_job_registry_entry_t registered_jobs[] = {
 #if SOLAR_OS_PACKAGE_JOB_HTTPD
     {"httpd", "static HTTP file server", &solar_os_httpd_job},
 #endif
+#if SOLAR_OS_PACKAGE_JOB_GESTURE_LISTENER
+    {"gestures", "run gesture-to-command bindings", &solar_os_gesture_listener_job},
+#endif
 #if SOLAR_OS_PACKAGE_JOB_FTPD
     {"ftpd", "FTP file server", &solar_os_ftpd_job},
 #endif
 #if SOLAR_OS_PACKAGE_JOB_CHATD
     {"chatd", "local chat gateway server", &solar_os_chatd_job},
+#endif
+#if SOLAR_OS_PACKAGE_JOB_IRC_SYNC
+    {"irc-sync", "maintain native IRC messaging instances", &solar_os_irc_sync_job},
 #endif
 #if SOLAR_OS_PACKAGE_JOB_GATEWAY_SYNC
     {"gateway-sync", "synchronize the gateway messaging provider", &solar_os_gateway_sync_job},
@@ -111,14 +150,23 @@ static const solar_os_job_registry_entry_t registered_jobs[] = {
 #if SOLAR_OS_PACKAGE_JOB_GPIO_KEYS
     {"gpio-keys", "attach pull-up GPIO keyboard buttons", &solar_os_gpio_keys_job},
 #endif
+#if SOLAR_OS_PACKAGE_JOB_GRAFFITI
+    {"graffiti", "Palm Graffiti full-screen touch keyboard", &solar_os_graffiti_job},
+#endif
 #if SOLAR_OS_PACKAGE_JOB_LOG
     {"log", "stream SolarOS logs to a port or file", &solar_os_log_job},
+#endif
+#if SOLAR_OS_PACKAGE_JOB_RTSPD
+    {"rtspd", "RTSP/RTP media publisher", &solar_os_rtspd_job},
 #endif
 #if SOLAR_OS_PACKAGE_JOB_MIDI
     {"midi", "bidirectional MIDI transport", &solar_os_midi_job},
 #endif
 #if SOLAR_OS_PACKAGE_JOB_MESHCORE
     {"meshcore", "MeshCore secure radio messaging", &solar_os_meshcore_job},
+#endif
+#if SOLAR_OS_PACKAGE_JOB_MESHCORE_BLE
+    {"meshcore-ble", "MeshCore companion over BLE", &solar_os_meshcore_ble_job},
 #endif
 #if SOLAR_OS_PACKAGE_JOB_NTP_SYNC
     {"ntp-sync", "periodic RTC NTP sync", &solar_os_ntp_sync_job},
@@ -129,6 +177,9 @@ static const solar_os_job_registry_entry_t registered_jobs[] = {
 #if SOLAR_OS_PACKAGE_JOB_POCSAG
     {"pocsag", "POCSAG pager receiver", &solar_os_pocsag_job},
 #endif
+#if SOLAR_OS_PACKAGE_JOB_PPPD
+    {"pppd", "PPP link on a byte-stream port", &solar_os_pppd_job},
+#endif
 #if SOLAR_OS_PACKAGE_JOB_PS2_KEYBOARD
     {"ps2-keyboard", "attach a keyboard on a named PS/2 bus", &solar_os_ps2_keyboard_job},
 #endif
@@ -137,6 +188,9 @@ static const solar_os_job_registry_entry_t registered_jobs[] = {
 #endif
 #if SOLAR_OS_PACKAGE_JOB_SLIP
     {"slip", "SLIP IPv4 gateway on a port", &solar_os_slip_job},
+#endif
+#if SOLAR_OS_PACKAGE_JOB_SPEECHD
+    {"speechd", "offline text-to-speech queue", &solar_os_speechd_job},
 #endif
 #if SOLAR_OS_PACKAGE_JOB_SUMP
     {"sump", "SUMP logic analyzer on cdc0", &solar_os_sump_job},

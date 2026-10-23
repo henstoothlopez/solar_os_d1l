@@ -88,7 +88,7 @@ static void man_list(solar_os_shell_io_t *io)
     for (size_t i = 0U; i < solar_os_manual_count(); i++) {
         const solar_os_manual_page_t *page = solar_os_manual_get(i);
         if (page != NULL) {
-            solar_os_shell_io_printf(io,
+            solar_os_shell_io_table_printf(io,
                                      "%-18s %-8s %s\n",
                                      page->id,
                                      page->section,
@@ -103,11 +103,11 @@ static size_t man_search(solar_os_shell_io_t *io, const char *query)
     const size_t count =
         solar_os_manual_search(query, matches, MAN_SEARCH_MAX);
     if (count == 0U) {
-        solar_os_shell_io_printf(io, "man: no entries for %s\n", query);
+        solar_os_shell_io_table_printf(io, "man: no entries for %s\n", query);
         return 0U;
     }
     for (size_t i = 0U; i < count; i++) {
-        solar_os_shell_io_printf(io,
+        solar_os_shell_io_table_printf(io,
                                  "%-18s - %s\n",
                                  matches[i]->id,
                                  matches[i]->summary);
@@ -426,7 +426,7 @@ static void docs_print_status(solar_os_shell_io_t *io)
     solar_os_shell_io_printf(io, "Firmware: %s\n", SOLAR_OS_VERSION);
     solar_os_shell_io_printf(io,
                              "External manual: %s\n",
-                             status.available ? "active" : "embedded fallback");
+                             status.available ? "active" : "built-in setup guide");
     if (status.available) {
         solar_os_shell_io_printf(io,
                                  "Manual version: %s%s\n",
@@ -502,7 +502,7 @@ void solar_os_shell_cmd_help(solar_os_context_t *ctx, int argc, char **argv)
     }
 #else
     if (argc == 2 && strcmp(argv[1], "status") == 0) {
-        solar_os_shell_io_writeln(io, "External manual: embedded");
+        solar_os_shell_io_writeln(io, "Manual: built-in setup guide");
         solar_os_shell_io_writeln(io, "Updates: unavailable on this build");
         return;
     }

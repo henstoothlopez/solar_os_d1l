@@ -16,14 +16,24 @@ process, filesystem, or device APIs.
 ## Start with discovery
 
 Inspect the installed board, packages, buses, displays, and safe pins before
-choosing names or hardware. Optional modules disappear when their package is
-not compiled.
+choosing names or hardware. Optional modules are available only when their services are included in the
+firmware. Start with `board`, `pkg`, `display list`, and `expansion status`.
 
-## Cooperate with the foreground session
+## Keep scripts responsive
 
-Interactive code must check `solaros.should_exit()` and release displays,
-buses, GPIO claims, files, and interpreter-owned services on every exit path.
-Use `try/finally` in Python and `pcall` plus explicit cleanup in Lua.
+Long-running loops should check `solaros.should_exit()` and sleep briefly so
+the OS can handle input. For example:
+
+```python
+import solaros
+
+while not solaros.should_exit():
+    print(solaros.time.uptime())
+    solaros.time.sleep_ms(1000)
+```
+
+Close opened files and release displays, buses, and GPIOs when finished, even
+after an error. Use `try/finally` in Python and `pcall` with cleanup in Lua.
 When a foreground script exits, SolarOS preserves its stdout, errors, and
 tracebacks in the launching shell. TUI and graphics screen contents are not
 copied into shell history. The normal terminal scrollback limit still applies.
@@ -32,14 +42,14 @@ nonzero code. `status` shows the most recent foreground-application exit code.
 
 ## Read foreground input
 
-Use `solaros.input.sources()` to discover pointer and axis sources, then use
+Use `solaros.input.sources()` to discover pointer, axis, and gesture sources, then use
 `solaros.input.read(timeout_ms)` for touch coordinates, mouse deltas and
-buttons, or joystick axes. The input queue belongs to the foreground Python or
+buttons, joystick axes, or recognized gestures. The input queue belongs to the foreground Python or
 Lua application. Headless source runners do not receive these events. Keep the
 timeout bounded so the loop can check `solaros.should_exit()` regularly.
 
 Keyboard characters and navigation keys use `solaros.tui.getch()` instead of
-the pointer and axis queue. See the Python or Lua API reference for event fields,
+the pointer, axis, and gesture queue. See the Python or Lua API reference for event fields,
 constants, queue capacity, and overflow reporting.
 
 ## Run a saved script

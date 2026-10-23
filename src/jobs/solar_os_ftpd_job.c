@@ -25,6 +25,7 @@
 #include "solar_os_log.h"
 #include "solar_os_storage.h"
 #include "solar_os_task.h"
+#include "solar_os_shutdown.h"
 
 #define FTPD_DEFAULT_PORT 21U
 #define FTPD_TASK_STACK 8192U
@@ -579,7 +580,7 @@ static bool ftpd_handle_authenticated(int fd,
     if (strcmp(command, "MKD") == 0 || strcmp(command, "XMKD") == 0) {
         if (!ftpd_command_path(client, argument, virtual_path, local_path) ||
             strcmp(virtual_path, "/") == 0 ||
-            mkdir(local_path, 0777) != 0) {
+            solar_os_storage_mkdir(local_path) != ESP_OK) {
             return ftpd_reply(fd, 550, "Cannot create directory.");
         }
         return ftpd_reply(fd, 257, "\"%s\" created.", virtual_path);
@@ -587,7 +588,7 @@ static bool ftpd_handle_authenticated(int fd,
     if (strcmp(command, "RMD") == 0 || strcmp(command, "XRMD") == 0) {
         if (!ftpd_command_path(client, argument, virtual_path, local_path) ||
             strcmp(virtual_path, "/") == 0 ||
-            rmdir(local_path) != 0) {
+            solar_os_storage_rmdir(local_path) != ESP_OK) {
             return ftpd_reply(fd, 550, "Cannot remove directory.");
         }
         return ftpd_reply(fd, 250, "Directory removed.");
@@ -595,7 +596,7 @@ static bool ftpd_handle_authenticated(int fd,
     if (strcmp(command, "DELE") == 0) {
         if (!ftpd_command_path(client, argument, virtual_path, local_path) ||
             strcmp(virtual_path, "/") == 0 ||
-            unlink(local_path) != 0) {
+            solar_os_storage_remove(local_path) != ESP_OK) {
             return ftpd_reply(fd, 550, "Cannot remove file.");
         }
         return ftpd_reply(fd, 250, "File removed.");
@@ -614,7 +615,7 @@ static bool ftpd_handle_authenticated(int fd,
         if (client->rename_from[0] == '\0' ||
             !ftpd_command_path(client, argument, virtual_path, local_path) ||
             strcmp(virtual_path, "/") == 0 ||
-            rename(client->rename_from, local_path) != 0) {
+            solar_os_storage_rename(client->rename_from, local_path) != ESP_OK) {
             client->rename_from[0] = '\0';
             return ftpd_reply(fd, 550, "Rename failed.");
         }
@@ -961,6 +962,10 @@ static void ftpd_stop(solar_os_context_t *ctx)
         }
         vTaskDelay(pdMS_TO_TICKS(25));
     }
+    portENTER_CRITICAL(&ftpd_lock);
+    const bool stopped = ftpd.task == NULL;
+    portEXIT_CRITICAL(&ftpd_lock);
+    if (!stopped) solar_os_shutdown_note_failure(ESP_ERR_TIMEOUT);
 }
 
 const solar_os_job_t solar_os_ftpd_job = {

@@ -113,6 +113,7 @@ set(SOLAR_OS_BOARD_CAPABILITY_NAMES
     SIMD
     POINTER
     STREAMING_DISPLAY
+    CAMERA
 )
 set(SOLAR_OS_BOARD_CAPABILITY_DEFINES)
 set(SOLAR_OS_BOARD_AVAILABLE_CAPABILITIES)
@@ -270,6 +271,62 @@ if(NOT SOLAR_OS_FLAVOR_GENERATE_RESULT EQUAL 0)
     message(FATAL_ERROR "SolarOS flavor generation failed")
 endif()
 include("${SOLAR_OS_GENERATED_CMAKE}")
+
+# Compile profile defaults from the same descriptions used by the desktop CLI.
+# Empty options produce standard maps and remove overrides from previous builds.
+foreach(SOLAR_OS_KEYMAP_OPTION SOLAR_OS_KEYMAP_PROFILE SOLAR_OS_KEYMAP_FILE SOLAR_OS_KEYMAPS_FILE)
+    if(NOT DEFINED ${SOLAR_OS_KEYMAP_OPTION})
+        set(${SOLAR_OS_KEYMAP_OPTION} "$ENV{${SOLAR_OS_KEYMAP_OPTION}}")
+    endif()
+endforeach()
+set(SOLAR_OS_KEYMAP_GENERATOR "${SOLAR_OS_PROJECT_DIR}/scripts/generate_keymaps.py")
+file(GLOB SOLAR_OS_KEYMAP_PROFILES "${SOLAR_OS_PROJECT_DIR}/keymaps/profiles/*.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${SOLAR_OS_KEYMAP_GENERATOR}"
+    "${SOLAR_OS_PROJECT_DIR}/scripts/solaros_keymap.py"
+    "${SOLAR_OS_PROJECT_DIR}/scripts/solaros_keymap_build.py"
+    ${SOLAR_OS_KEYMAP_PROFILES}
+)
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${SOLAR_OS_KEYMAP_GENERATOR}"
+        "--root" "${SOLAR_OS_PROJECT_DIR}" "--output-dir" "${SOLAR_OS_GENERATED_DIR}"
+        "--profile" "${SOLAR_OS_KEYMAP_PROFILE}" "--file" "${SOLAR_OS_KEYMAP_FILE}"
+        "--index" "${SOLAR_OS_KEYMAPS_FILE}"
+        "--dependencies" "${SOLAR_OS_GENERATED_DIR}/solar_os_keymap_inputs.cmake"
+    RESULT_VARIABLE SOLAR_OS_KEYMAP_GENERATE_RESULT
+)
+if(NOT SOLAR_OS_KEYMAP_GENERATE_RESULT EQUAL 0)
+    message(FATAL_ERROR "SolarOS keymap generation failed")
+endif()
+include("${SOLAR_OS_GENERATED_DIR}/solar_os_keymap_inputs.cmake")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${SOLAR_OS_KEYMAP_INPUTS})
+foreach(SOLAR_OS_KEYMAP_PACKAGE IN LISTS SOLAR_OS_KEYMAP_REQUIRED_PACKAGES)
+    if(NOT SOLAR_OS_PACKAGE_${SOLAR_OS_KEYMAP_PACKAGE})
+        message(FATAL_ERROR "Custom keymap requires package ${SOLAR_OS_KEYMAP_PACKAGE} in the selected flavor")
+    endif()
+endforeach()
+if(SOLAR_OS_PACKAGE_SERVICE_NATIVE_MODULES)
+    set(SOLAR_OS_NATIVE_ELF_PATCH "${SOLAR_OS_PROJECT_DIR}/scripts/patch_native_elf.py")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SOLAR_OS_NATIVE_ELF_PATCH}")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${SOLAR_OS_NATIVE_ELF_PATCH}"
+        "${SOLAR_OS_PROJECT_DIR}/managed_components/espressif__elf_loader"
+        RESULT_VARIABLE SOLAR_OS_NATIVE_ELF_PATCH_RESULT)
+    if(NOT SOLAR_OS_NATIVE_ELF_PATCH_RESULT EQUAL 0)
+        message(FATAL_ERROR "SolarOS native ELF overlay failed")
+    endif()
+endif()
+
+if(SOLAR_OS_PACKAGE_SERVICE_INFERENCE)
+    set(SOLAR_OS_ESPDL_DIR "${SOLAR_OS_PROJECT_DIR}/managed_components/espressif__esp-dl")
+    set(SOLAR_OS_ESPDL_PATCH "${SOLAR_OS_PROJECT_DIR}/scripts/patch_espdl.py")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${SOLAR_OS_ESPDL_PATCH}" "${SOLAR_OS_PROJECT_DIR}/scripts/espdl/worker_runtime.inc")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${SOLAR_OS_ESPDL_PATCH}"
+        "${SOLAR_OS_ESPDL_DIR}" RESULT_VARIABLE SOLAR_OS_ESPDL_PATCH_RESULT)
+    if(NOT SOLAR_OS_ESPDL_PATCH_RESULT EQUAL 0)
+        message(FATAL_ERROR "SolarOS ESP-DL ownership/allocation overlay failed")
+    endif()
+endif()
 message(STATUS "SolarOS flavor: ${SOLAR_OS_FLAVOR_NAME} (${SOLAR_OS_FLAVOR_INPUT})")
 message(STATUS "SolarOS update layout: ${SOLAR_OS_LAYOUT}")
 
@@ -298,6 +355,7 @@ if(NOT SOLAR_OS_MANUAL_GENERATE_RESULT EQUAL 0)
 endif()
 
 if((SOLAR_OS_PACKAGE_EXPANSION_PCD8544 OR
+        SOLAR_OS_PACKAGE_EXPANSION_SSD1677 OR
         SOLAR_OS_PACKAGE_EXPANSION_SSD1683 OR
         SOLAR_OS_PACKAGE_EXPANSION_SSD1306)
         AND NOT SOLAR_OS_BOARD_HAS_GFX)
@@ -438,12 +496,19 @@ set(SOLAR_OS_FLAVOR_STAMP
 )
 
 set(SOLAR_OS_EXTRA_INCLUDE_DIRS)
+if(SOLAR_OS_PACKAGE_SERVICE_DISPLAY_LINK)
+    list(APPEND SOLAR_OS_EXTRA_INCLUDE_DIRS "../protocol/display_link/include")
+endif()
 if(SOLAR_OS_PACKAGE_SERVICE_MESHCORE)
     list(APPEND SOLAR_OS_EXTRA_INCLUDE_DIRS
         "../src/vendor/meshcore"
         "../src/vendor/meshcore/crypto"
         "../src/vendor/meshcore/ed25519"
     )
+endif()
+
+if(SOLAR_OS_PACKAGE_BHI260AP)
+    list(APPEND SOLAR_OS_EXTRA_INCLUDE_DIRS "vendor/bhy2")
 endif()
 
 # The version is a component-wide compile definition. Make it an explicit
@@ -453,13 +518,28 @@ set_property(SOURCE ${SOLAR_OS_SRCS} APPEND PROPERTY OBJECT_DEPENDS
     "${SOLAR_OS_VERSION_FILE}"
 )
 
+set(SOLAR_OS_LINKER_FRAGMENTS)
+if(SOLAR_OS_PACKAGE_DRIVER_CAMERA_ESP32)
+    list(APPEND SOLAR_OS_LINKER_FRAGMENTS "camera_memory.lf")
+endif()
+
 idf_component_register(
     SRCS ${SOLAR_OS_SRCS}
     INCLUDE_DIRS "." "apps" "board" "drivers" "jobs" "services" "shell"
                  "../include" "${SOLAR_OS_GENERATED_DIR}"
                  ${SOLAR_OS_EXTRA_INCLUDE_DIRS}
     REQUIRES ${SOLAR_OS_REQUIRES}
+    LDFRAGMENTS ${SOLAR_OS_LINKER_FRAGMENTS}
 )
+
+if(SOLAR_OS_PACKAGE_BHI260AP)
+    target_add_binary_data(${COMPONENT_LIB} "vendor/bhy2/BHI260AP.fw" BINARY)
+endif()
+
+if(SOLAR_OS_PACKAGE_SERVICE_MPEG)
+    set_source_files_properties(services/solar_os_mpeg.c
+        services/solar_os_mpeg_raster.c PROPERTIES COMPILE_OPTIONS "-O2")
+endif()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     ${SOLAR_OS_BOARD_DEFINE}=1
@@ -471,6 +551,13 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     SOLAR_OS_VERSION="${SOLAR_OS_VERSION}"
     SOLAR_OS_FLAVOR_STAMP="${SOLAR_OS_FLAVOR_STAMP}"
 )
+if(SOLAR_OS_MODULE_REPOSITORY_URL)
+    if(NOT SOLAR_OS_MODULE_REPOSITORY_URL MATCHES "^https?://[A-Za-z0-9:/._%~-]+$")
+        message(FATAL_ERROR "Invalid SolarOS module repository URL")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        SOLAR_OS_MODULE_REPOSITORY_URL="${SOLAR_OS_MODULE_REPOSITORY_URL}")
+endif()
 
 if(SOLAR_OS_BOARD_GENERATED)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE

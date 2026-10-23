@@ -138,19 +138,33 @@ local devices = solaros.buses.onewire_scan("onewire0")
 local reply = solaros.buses.onewire_xfer("onewire0", 9, "\xcc\x44")
 ```
 
-`solaros.expansion.drivers()` lists compiled drivers with their categories.
+`solaros.expansion.drivers()` lists registered drivers with their categories.
 `devices()` lists active devices with `name`, `driver`, `origin` (`board` or
 `runtime`), `ready`,
 `autostart`, `detachable`, and normalized `bindings`. Each binding contains
 `kind`, `role`, `target`, `value`, and `aux`. `attach(driver, name, bindings)`
 and `detach(name)` mirror the shell lifecycle. Binding tables accept `spi`,
-`cs` (or `ce`), `i2c`, `addr`, `uart`, `ps2`, `gpio`, `irq`, `reset` (or
+`cs` (or `ce`), `i2c`, `addr`, `alt_addr`, `uart`, `ps2`, `gpio`, `irq`, `int`, `reset` (or
 `rst`), `dc`, `busy`, `data`, `bck`, `din`, `rck`, `mclk`, `ws`, `dout`,
 `adc`, `pwm`, `count`, `keys`, `x`, `y`, `min`, `center`, `max`, and
 `deadzone`. `ps2` names an
 existing PS/2 bus; `x` and `y` name scalar streams; `keys` maps logical key
-names to GPIO numbers. `cs` requires `spi`, `addr` requires `i2c`, and unknown
-fields are rejected.
+names to GPIO numbers. `cs` requires `spi`; `addr` and `alt_addr` require
+`i2c`; unknown fields are rejected.
+
+DRV8830 attachments also accept integer `max_mv` to configure the voltage
+represented by full normalized motor drive. See [Motor control](motor.md).
+
+`pcnt-encoder` requires integer `a`, `b`, and `mode` (1, 2, or 4). Optional
+integer `invert`, `pull`, and `filter_ns` configure its inputs.
+See [Encoder counts](encoder.md).
+
+Camera DVP attachments also accept GPIO-number bindings `d0`..`d7`, `siod`,
+`sioc`, `vsync`, `href`, `pclk`, `xclk`, and optional `pwdn`/`reset`. The camera
+driver validates required pins and claims; board-owned cameras cannot be detached.
+For SCCB control, specify either `i2c="i2c0"` (or another existing named bus)
+or both `siod` and `sioc` GPIO numbers. These modes cannot be combined. A named
+bus retains its wiring and other attached devices when the camera stops.
 
 ```lua
 solaros.expansion.attach("pcd8544", "lcd0", {

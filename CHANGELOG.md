@@ -2,6 +2,622 @@
 
 ## 4.x
 
+- **4.16.27** — 2026-10-22 — Added named motor and encoder services with
+  shell controls and Python/Lua bindings. DRV8830 motors use normalized signed
+  drive commands over named I2C buses, with an optional fault input. Native
+  A/B encoders support explicit x1, x2, and x4 counting modes, signed counts,
+  and reset. Fixed SSD1306/SH1106 OLED attachment on named buses and reduced
+  I2C refresh overhead; OLED emotion faces now default to animated 25 fps
+  submissions. Emotion colors follow terminal settings, with independent
+  foreground/background overrides. Fixed T-Deck keyboard and Wi-Fi wake
+  regressions, restored keyboard backlight state after suspend, and preserved
+  SD power and SPI chip selects during light sleep.
+- **4.16.25** — 2026-10-21 — Added an optional emotion engine for
+  ESP32-S3 devices with executable PSRAM. Python and Lua scripts can animate
+  21 Cozmo-style expressions on supported display targets, control gaze and
+  blinking, and play four reaction sounds. Faces animate independently of
+  script work and pause with foreground sessions. Added examples and API
+  documentation, and fixed a reboot during face cleanup.
+- **4.16.24** — 2026-10-21 — Added GNSS output controls for recognized
+  receivers and software release of T-Deck's shared Grove UART. Shell tables
+  and the I/O TUI now fit terminal width. KEY short and long presses support
+  configurable actions, including suspend, sleep, and deep sleep. Fixed suspend
+  wake for supported wired keyboards. App discovery runs before shells start;
+  T-Deck's keyboard backlight starts disabled.
+  Added reusable trackball pointer input and the `pointer-arrows` job, with
+  held-key repeat and adjustable `min-vector` sensitivity (default `2`).
+  Added RX gain controls for SX1262, RFM95, and RFM69 radios. Contacts now
+  supports trust/block, rename, link/remove, filtering, and status, with
+  discoverable help and visible edit cursors.
+- **4.16.23** — 2026-10-20 — Improved T-Deck trackball navigation and
+  keyboard shortcuts, including Mic for Tab and Shift+Mic for Ctrl.
+  Added `setterm backlight` controls. Fixed held keys, typing repeat,
+  native foreground input, T-Deck GNSS registration, and SX1262 wake from sleep.
+- **4.16.22** — 2026-10-20 — Added optional lossless LZ4 compression for DLP
+  display connections. Set `compressed=1` when attaching `spi-dlp` or
+  `stream-dlp` displays; saved startup attachments and board manifests retain
+  the setting. Senders negotiate support and choose raw, RLE, or LZ4 per block,
+  with raw/RLE fallback for older endpoints. DLP display servers accept LZ4
+  updates without a separate setting. Compression preserves pixel values and
+  works across supported pixel formats over SPI and ordered byte streams.
+  Fastwave e-paper updates now pace new images independently of settling
+  cycles, allowing pending pixel transitions to continue between frames.
+- **4.16.21** — 2026-10-19 — Added Fastwave waveforms for SolarWriter and
+  supported CrowPanel e-paper panels, with automatic cleanup and recovery.
+  The cancellable `display relax` command runs repeated black/white recovery
+  cycles and restores the saved image and refresh settings afterward.
+  SSD1683 displays now accept monochrome raster frames from native apps,
+  including scaled and dithered emulator output. Writerdeck now includes the
+  synthesizer and shared synth service for native-app audio.
+- **4.16.20** — 2026-10-19 — Added native IRC to unified Chat with verified
+  TLS, optional SASL authentication, channels, private messages, automatic
+  reconnect and rejoin, bounded buffers, and flood control. Each IRC instance
+  has independent server, nickname, authentication, and conversation settings.
+  Gateway, MeshCore, and Link now support named instances with isolated
+  messaging state. MeshCore supports independent radio and BLE companion
+  instances; Link instances use named transports.
+  Added common instance setup, connection, join, and private conversation
+  controls across the shell, Chat, Python, and Lua. Removing an instance also
+  deletes its local history, notifications, settings, and credentials, cancels
+  queued sends, and finishes interrupted removal after reboot.
+  Moved messaging profiles, shared credentials, radio profiles, and ESP-NOW
+  peers to mounted storage, with checked migration from legacy NVS settings.
+  Fixed display-shell stack overflows during IRC setup and disconnect, provider
+  completion, join metadata, and direct-message security metadata. Chat uses
+  shell quoting rules for setup commands, excludes credentials from input
+  history, and displays connection and authentication failures. IRC status
+  includes SASL rejection codes and server reasons.
+  Fixed DLP exit shortcuts and display attachment stack usage. BLE discovery
+  can run while the keyboard is reconnecting.
+- **4.16.19** — 2026-10-18 — Serve named displays with `dlp` over USB/UART,
+  TCP/Wi-Fi, BLE, or compatible radio byte streams. Attach remote displays with
+  `stream-dlp`, or open private DLP connections from Python and Lua without
+  registering a display. SPI attachment is now named `spi-dlp`.
+  Windowed uploads, compact framing, and compressed changed-region updates
+  improve transfer throughput. Display serving uses performance mode and
+  reports presentation timings; receivers wait for reconnect and restore the
+  shell on exit. Detaching releases display buffers and the stream claim.
+  Added raw TCP and native BLE L2CAP CoC byte streams, with shell commands,
+  completion, and Python/Lua BLE endpoint configuration. BLE streams coexist
+  with the input keyboard and currently accept unpaired connections.
+  Link stream protocol v3 adds windowed transfers and receiver credits for
+  sustained traffic with backpressure and prompt interactive writes. MeshCore
+  uses a smaller window with radio-specific timings. Both stream endpoints
+  must be updated; Chat and outer Link packet framing are unchanged.
+  Port shells remain responsive on idle or disconnected streams. Added a
+  navigation guide covering shared controls and board-specific keys.
+- **4.16.18** — 2026-10-17 — Added a resumable external Amiga 500 app for
+  ESP32-S3 devices with PSRAM, with 1 MiB guest RAM, keyboard, mouse and touch
+  input, joystick emulation, audio, and one read-only ADF floppy drive.
+  Kickstart 1.3 ROM and disk images are supplied separately. The guest screen
+  fits the display, and function keys select keyboard, mouse, or joystick mode.
+  Amiga audio preserves pitch as emulation speed changes, with adaptive
+  buffering and more regular video updates under load.
+  Reduced native service-call overhead and accelerated indexed-color conversion
+  for monochrome displays. Added optional frame-buffer exchange and cooperative
+  CPU checkpoints for foreground modules, reducing frame copies and unnecessary
+  sleeps in Amiga, Macintosh Plus, DOOM, Tiny386, and accelerated Apple II use.
+  Foreground modules gain mouse and touch events and read-only calendar access;
+  video restores the latest frame after session switching. Amiga ROM and disk
+  paths support relative names and tab completion.
+  Added the compact `classic` firmware profile as the default for classic ESP32
+  targets, retaining Python, Playground, writing, media, communications, and
+  board controls, including the ODROID-GO ADC D-pad.
+  Fixed incremental linker generation after memory-layout configuration changes.
+- **4.16.17** — 2026-10-17 — Added generic SPI display attachment through
+  Display Link Protocol (DLP), with discovered dimensions and pixel formats,
+  optional READY and RESET lines, changed-region uploads, and optional RLE
+  compression. The portable protocol also supports ordered byte streams.
+  Added a 6×8 bitmap terminal font for small displays.
+  Recorder, Player, WebRadio, VPlay, and Invaders now adapt to small display
+  targets, including 128×64 and 240×64. Sketch reports insufficient resolution
+  and returns to the shell on displays smaller than 200×200.
+  Added a German Epson HX-20 keyboard profile.
+- **4.16.16** — 2026-10-16 — Added resumable external DOOM and
+  Macintosh Plus apps for ESP32-S3 devices with PSRAM. DOOM supports
+  DOOM/DOOM II IWADs, keyboard controls, sound effects, display fitting,
+  and monochrome conversion; game data is supplied separately.
+  Macintosh Plus provides 4 MiB guest RAM, keyboard-controlled mouse,
+  one SCSI hard disk or raw floppy image, and persistent PRAM. A Plus v3
+  ROM adapts the guest screen to the selected display; ROMs and disks
+  are supplied separately.
+  Fixed foreground video startup on smaller displays, including DOOM by 
+  fitting source frames before validating output dimensions.
+  Rotated TFT frames now use managed PSRAM, fixing presentation failures
+  when the SDK heap cannot supply rotation buffers.
+  Standalone ESP-DL library builds now prepare their own ESP32-S3 SDK
+  without requiring an existing firmware build.
+- **4.16.15** — 2026-10-14 — Added Files-style Space selection to both
+  FTP and SFTP panes. Copy, move, and delete operate on marked files and
+  directories; completed items are unmarked, and a failure stops the batch.
+  Delete now removes the character under the shell command-line cursor.
+  Prompt paths longer than half the terminal width show only the last directory,
+  without changing the working directory.
+  Writerdeck now includes speech, Player, and Recorder, and omits the inference
+  and RTSP groups.
+- **4.16.14** — 2026-10-14 — Added a reusable DS3231 I2C real-time clock
+  expansion driver with named buses, optional active-low interrupt wiring,
+  a 2000–2099 UTC calendar, and second-resolution Alarm 1 support through
+  the existing time/RTC shell, Python, and Lua APIs. Reads accept 12-hour
+  and 24-hour clocks; oscillator-stop status marks time unreliable until
+  it is set. Countdown timers are unsupported.
+  SolarWriter now automatically attaches board-owned `rtc0` at `0x68`
+  on the shared fuel-gauge I2C bus (SDA GPIO8, SCL GPIO9). Its RTC driver
+  is included in every flavor, including `writerdeck`; INT/SQW is unbound
+  in the default profile.
+- **4.16.13** — 2026-10-14 — Added managed PSRAM allocation that groups
+  large buffers separately from resident executable images and metadata,
+  merges adjacent free blocks, and reclaims unused native libraries under
+  memory pressure. Active library consumers and suspended application sessions
+  retain their state. `mem` reports managed PSRAM and its largest free block;
+  `mem reclaim` releases unused libraries, and `mem policy` shows SDK heap
+  availability separately.
+  ESP-DL now releases activation workspace between inference calls, allowing
+  image preprocessing to reuse that memory while weights remain loaded.
+  Reduced Zoo startup and exit delays by eliminating repeated catalog parsing
+  and improving allocation and cleanup of small objects.
+  Fixed silent short alarm tones and kept tone sequences on one audio stream
+  through pauses and playback completion.
+  Fixed Help updates with more than 256 pages; firmware and manual generation
+  now support up to 1024 pages. Packed resident Help metadata to reduce PSRAM
+  fragmentation.
+- **4.16.12** — 2026-10-14 — Added resident native libraries and the
+  library module category on ESP32-S3 devices with PSRAM. Libraries load on
+  demand, share APIs between consumers, and stay resident until explicitly
+  unloaded; active consumers prevent unloading or removal.
+  Added the downloadable ESP-DL inference engine through `pkg install espdl`,
+  with single, auto, and dual-core execution through the existing model,
+  Python, Lua, and native APIs. Models retain the engine until unloaded;
+  `model backend` reports the selected provider. Model loading uses the
+  installed library without downloading code automatically.
+  Consolidated firmware profiles to standard `full` and compact `writerdeck`,
+  retiring `vga32`, `rover`, `core`, and `netrunner`. Both profiles use the
+  downloadable engine; custom flavors can still include ESP-DL in firmware.
+  Writerdeck retains Python and Playground, plus `pkg` on supported targets,
+  and fits the smaller CrowPanel OTA slots and classic-ESP32 factory slots.
+  Added signed OTA flavor redirects for future renames, saving the resolved
+  target only after a successful verified upgrade. Writerdeck keeps its
+  published name for now; no redirect is enabled.
+- **4.16.11** — 2026-10-13 — Added `shutdown` on all targets, with
+  app, job, and radio cleanup and persistent storage flushing and unmounting.
+  Uses hardware cutoff on CL32, Waveshare ESP32-S3-ePaper-3.97, and
+  T-LoRa-Pager, turns off supported peripheral rails, and otherwise enters
+  deep sleep. Shutdown allows only physical power/KEY wake and starts a
+  fresh boot; RTC and scheduled timer wake are disabled.
+  Added state splashes: **Suspended**, **Sleeping**, and **Powered off**,
+  including a completed native refresh before e-paper power-down.
+  Suspend and light-sleep wake redraw foreground and auxiliary displays.
+  Fixed ESP-DL patch application in cached PlatformIO builds after managed
+  dependency restoration.
+- **4.16.10** — 2026-10-13 — Added RTSP client Basic and Digest MD5
+  authentication with inline URL credentials or up to four saved accounts
+  managed by `rtsp-auth`. Player titles and connection messages hide URL
+  passwords. FTP, SFTP, and Telnet now complete hostname aliases from
+  `.ssh/hosts`, including SFTP `user@` prefixes and Telnet raw mode.
+  FTP and SFTP gain `PgUp`/`PgDn` paging, Backspace parent navigation,
+  and `h` to toggle hidden files and directories in both panes.
+  The default BLE device name now uses the configured hostname and is
+  restored when a BLE peripheral app closes.
+- **4.16.9** — 2026-10-13 — Added the SolarWriter board profile for the
+  Elecrow 5.79-inch CrowPanel with microphone, shared DAC/amplifier output,
+  and battery gauge. Added reusable INMP441 expansion audio with 16 kHz mono
+  capture and optional shared-clock stereo playback, and the LC709203F fuel
+  gauge with CRC-checked voltage/state of charge and configurable battery
+  capacity. Corrected shared I2S playback clock ownership.
+  Added monochrome `refresh=pulse` for Elecrow 5.79-inch dual-SSD1683,
+  Waveshare 4.2-inch V2/rev2.2, and Elecrow 4.2-inch green-sticker panels.
+  Pulse mode provides per-pixel drive budgets, asynchronous updates while
+  pixels settle, manual waveform/SPI/power tuning, and fixed or adaptive
+  native cleanup. Failed pulse scans recover through native refresh.
+  The green-sticker board starts in pulse mode with its calibrated preset
+  and fixed cleanup every eight changed targets. Corrected its active-low
+  BUSY handling and preserved CrowPanel display control pins during automatic
+  light sleep.
+- **4.16.8** — 2026-10-12 — Apple II Plus now bundles its system and Disk II
+  ROMs. `apple2` starts BASIC without external assets; `apple2 file.nib`
+  boots a disk, and Files opens NIB images with the installed module.
+  Added the resumable Tiny386 module with embedded SeaBIOS, bootable PC
+  floppy and IDE hard-disk images, with direct storage access and synced writes.
+  Raw FAT `.img` files can be mounted for host file edits, and `disk create`
+  makes new MBR/FAT images. Native apps can query foreground
+  display dimensions; Tiny386 text follows the selected display resolution.
+  Simplified the manual around usage and added an architecture overview.
+- **4.16.7** — 2026-10-11 — Added resumable external foreground apps on
+  ESP32-S3 devices with PSRAM. Installed apps appear in the app registry and
+  launch by name, through `session create`, or directly with `load`.
+  Apps declare their worker and memory requirements before launch; switching
+  sessions retains their state while releasing display and audio ownership.
+  Added the Apple II Plus module with text and graphics, two NIB disk drives,
+  keyboard, paddles, speaker, and explicit disk saves. Game Boy is now an
+  external app with cartridge saves, held-button input, four-shade video, and
+  optional stereo audio. Files opens `.gb` ROMs through the installed module.
+  ROM and disk images are supplied separately. The module catalog contains
+  apps, jobs, and drivers; both emulators use the common foreground app
+  lifecycle. Foreground modules gain asynchronous indexed video, joined audio
+  callbacks, and input release/reset events. Corrected PWM dependencies for
+  display backlight drivers in focused builds.
+- **4.16.6** — 2026-10-11 — Added calibrated positional servo control
+  through the `servo` command and `solaros.servo` in Python and Lua, with
+  explicit angle/pulse limits, optional inversion, and named outputs.
+  Opening reserves an output without pulses; disable retains the reservation,
+  while close releases it. Scripts close their servos on interpreter exit.
+  PWM gains provider discovery, `provider:number` output names, and pulse-width
+  commands while retaining native GPIO shorthand. Added the reusable PCA9685
+  I2C expansion driver with 16 PWM channels, usable for general PWM or servos.
+  Outputs enforce their controller's shared-frequency constraints; all PCA9685
+  channels share one frequency. Servo support and the PCA9685 driver are
+  included in the full flavor where supported.
+- **4.16.5** — 2026-10-10 — Added Elecrow ThinkNode M9 support with a
+  320x240 ST7789 display, backlit STC8H QWERTY keypad, microSD, PCF8563 RTC,
+  NMEA GNSS, battery ADC, PWM buzzer, USB/UART console, Wi-Fi, and BLE.
+  The keypad provides app-exit and function keys plus a compose layer for
+  missing shell characters, tab completion, and scrollback navigation.
+  Its I2C address identifies board revisions; revision 1.1 requires
+  `active = 1` for GNSS power in the manifest. GNSS starts powered off;
+  use `gnss power on` to enable it. Added reusable STC8H keyboard and
+  NMEA 0183 GNSS expansion drivers, with background RMC/GGA reception and
+  optional alternate-baud detection. Named I2C buses now use independent
+  controllers while retaining the board's primary bus for legacy drivers.
+  TFT displays support board-declared active-low power rails. ODROID-GO
+  gains runtime I2C buses on free GPIO4/GPIO15 through `expansion bus create`.
+- **4.16.4** — 2026-10-08 — Python and Lua BLE HID APIs gain saved-host
+  listing, explicit host selection, disconnect, and per-host pairing removal.
+  Manual mode offers reconnects only to the selected host and can pair a
+  new host while retaining existing pairings and the local input keyboard.
+  Connected host names are read asynchronously when available. Reconnects
+  use the saved bond's security settings, and the HID GATT database stays
+  stable across BLE restarts. Explicit pairing can replace an unused bond
+  when storage is full while preserving the remembered input keyboard and
+  connected peers.
+- **4.16.3** — 2026-10-08 — Added the reusable M5Stack Tab5 Keyboard
+  expansion driver with named I2C bindings, an optional interrupt, physical
+  press/release events, key repeat, held modifiers, and the printed Sym layer.
+  Runtime keymaps can be inspected, loaded, and reset through `input keymap`.
+  The full flavor includes the driver on ESP32 and ESP32-S3 boards with
+  expansion I2C support. The Waveshare 4G/e-paper profile now uses Tab5 as
+  fixed `keyboard0` at `0x6d`, with INT on GPIO41, replacing its Inputronic
+  default and freeing GPIO40 for expansion.
+- **4.16.2** — 2026-10-06 — Added the reusable Soldered Inputronic
+  keyboard driver and enabled it on the custom Waveshare 4G/e-paper profile.
+  TCA8418 keyboards share one controller backend with separate generic,
+  Inputronic, and LilyGO Pager mapping profiles. The generic driver supports
+  configurable matrix geometry. All three support validated JSON keymaps,
+  inspection and reset through `input keymap`, and map loading and reset from
+  Python and Lua. Source mapping is owned by the reusable input-keymap
+  service, with source-local physical IDs, optional matrix selectors, and
+  capability discovery through the shell and both runtimes. Keyboard profiles
+  have shared descriptions for a desktop Python keymap CLI and
+  validated build-time custom defaults, selected per keyboard profile.
+  Runtime map loading and reset retain those compiled defaults. The Pager
+  profile retains its symbol layer and backlight;
+  custom Pager configurations should use `lilygo-pager-keyboard` in place of
+  `tca8418`. Python and Lua can exclusively capture a named local keyboard
+  with source-specific key presses, releases, HID usages, and modifiers for
+  forwarding utilities. Capture bypasses local shortcuts and releases on
+  runtime teardown; queue loss and source removal signal an input reset.
+- **4.16.1** — 2026-10-06 — Camera expansion attachments can use a
+  named I2C bus for SCCB control, including the board-owned bus wired to the
+  CL32 camera connector, or explicit SIOD/SIOC pins. Shared bus devices remain
+  available when the camera stops; the camera retains its bus lease until
+  detach. Corrected C++ exception configuration for ESP-DL builds, including
+  existing SDK configuration files.
+- **4.16.0** — 2026-10-05 — Added reusable computer vision and resident
+  ESP-DL inference for Python, Lua, shell commands, and native modules.
+  Scripts can decode QR codes and use image statistics, histograms,
+  thresholding, filters, morphology, image differences, and blob detection.
+  On ESP32-S3 with PSRAM, `model` loads shared resident models and checked
+  bundles with native image preparation, classification, and PICO detection;
+  single, automatic, and dual-core execution modes are available. OS-owned
+  `pipeline` jobs process pictures, camera streams, or JPEG RTSP feeds and
+  expose bounded latest results after the configuring script exits. The
+  `zoo` browser searches the hosted catalog and installs hash-verified model
+  bundles on SD or flash through staged replacement. Models remain resident
+  until explicitly unloaded or rebooted; local cameras retain exclusive
+  ownership. The full flavor enables these services where supported.
+- **4.15.19** — 2026-10-04 — Added Xteink X4 Pro support with an
+  800x480 e-paper display, GT911 touch and Home pad, fixed-mix warm/cool
+  frontlight brightness, one-bit SDMMC storage, BM8563-compatible RTC,
+  CW2017 battery gauge, navigation buttons, USB/UART consoles, Wi-Fi, and BLE.
+  One image identifies SSD1677, UC8179, or UC8279 displays on first use and
+  caches the controller only after successful initialization. Added reusable
+  UC8179 and UC8279 e-paper, PCF8563/BM8563 RTC, and CW2017 fuel-gauge
+  expansion drivers, plus optional GT911 reset, power, and Home-key bindings
+  and SDMMC rail power cycling.
+- **4.15.18** — 2026-10-02 — Reduced firmware-resident documentation to
+  a searchable topic directory and a small setup and recovery guide. Full
+  guides and scripting API references remain in the signed downloadable
+  manual and on the website. Run `help update` on devices with Wi-Fi, PSRAM,
+  and SD storage to install the exact-version manual; it remains readable
+  offline while its storage is mounted. The agent uses downloaded Quick
+  references or setup instructions when the manual is unavailable.
+- **4.15.17** — 2026-10-02 — Python and Lua gain
+  `solaros.storage.write_file()` for creating, saving, and appending text or
+  binary files through the storage service. Writes support up to 64 KiB per
+  call and flush and sync the file before returning the byte count.
+- **4.15.16** — 2026-10-02 — MeshCore group conversations identify radio
+  and companion transports; unavailable channels remain readable as history
+  and reject new sends. Chat follows actual delivery updates, and messages
+  interrupted by a restart are restored as failed instead of queued. Contacts
+  now retain up to 512 contacts and 576 endpoints, with migration of existing
+  contact IDs and trust settings. Companion imports preserve retained contacts,
+  batch their storage writes, and report imported, skipped, and supported
+  contact counts. An online MeshCore BLE companion displays the radio icon.
+- **4.15.15** — 2026-10-01 — Updated to ESP-IDF 5.5.5 and pinned the
+  pioarduino platform to release `55.03.312-1` for reproducible builds.
+  PlatformIO Core 6.2.0 or newer is required. The NimBLE overlay retains
+  transactional dynamic GATT registration and guards an absent connection
+  awareness table when GATT caching is enabled.
+- **4.15.14** — 2026-10-01 — `player` and `vplay` gain
+  backward/forward seeking in ten-second steps with `<`/`>` and shared
+  rewind/forward buttons. Seeking retains the selected track and pause
+  state, releases queued audio, and rebases playback timing. Player supports
+  seeking in both graphical and text interfaces. WAV seeks to sample
+  boundaries; MP3 scans frame headers and decodes a bounded reservoir/filter
+  warm-up near the target. MPEG uses timestamped intra-frame seeking with
+  video-reference and MP2 warm-up, falling back to sequential decoding when
+  timestamps are unavailable. Seek processing remains bounded, cancellable,
+  and watchdog-safe, preserves audio/video timing, and displays SEEKING while
+  preparing playback. Player, WebRadio, and VPlay share a compact bottom
+  controls panel with status/time above volume and a larger media viewport.
+  WebRadio adds elapsed output time, clickable transport controls, and Space
+  pause/resume. The middle Stop/Play control indicates pause while paused;
+  seek icons match the other controls' height.
+- **4.15.13** — 2026-10-01 — Files opens MPEG-1 `.mpg` and
+  `.mpeg` files in `vplay` when the app is installed, including uppercase
+  extensions. Closing playback returns to the file browser. The Files help
+  lists the MPEG association alongside its other supported file types.
+- **4.15.12** — 2026-10-01 — RTSP now uses the common player
+  header, volume bar, and clickable Stop/Play control. Enter or Space stops
+  playback without closing the app; Play reconnects to the same source after
+  its workers release their resources. The audio-only oscilloscope fills the
+  available viewport and expands edge-to-edge in full screen, where controls
+  are hidden. `vplay` adds tab completion for size options and file paths.
+- **4.15.11** — 2026-10-01 — Added `vplay` for MPEG-1 program
+  stream files with optional MP2 audio. Playback uses bounded PSRAM buffers,
+  audio-clock synchronization, native RGB565 or monochrome output, and
+  ESP32-S3 SIMD color conversion. The shared player controls provide pause,
+  Stop/Play, volume, and previous/next MPEG files in the current folder.
+  Fit, actual-size, and full-screen modes are available; the source limit
+  is 640x480. MPEG-2, H.264, AVI, and transport streams are not supported.
+- **4.15.10** — 2026-10-01 — Shared JPEG decoding now uses a
+  fast ROM path and bounded ESP32-S3 SIMD acceleration, with fallbacks for
+  unsupported images or limited working memory. Color and monochrome consumers
+  share the improved decoder, and fit-mode output avoids full-size intermediate
+  rasters. Reduced idle SRAM usage by moving suitable registry state to PSRAM
+  and allocating display-layout, Telnet, Chat, DAQ, and Synth working buffers
+  only when needed.
+- **4.15.9** — 2026-10-01 — Python and Lua gain owned camera
+  snapshots, local stream frames, native frame-to-image presentation, and
+  asynchronous RTSP receiver handles. JPEG save failures report the path and
+  filesystem cause. Native RTSP playback retries transient failures with
+  bounded backoff, discards frames from previous connections, and recovers
+  audio after forward clock jumps. The viewer accepts addresses without
+  `rtsp://`; omitted control ports default to TCP 554.
+- **4.15.8** — 2026-10-01 — DVP cameras are reusable expansion
+  devices and exclusive typed video sources in `streams`. The native `rtsp`
+  app plays JPEG/L16 streams with bounded video/audio buffering, global
+  volume, an audio-only oscilloscope, full-screen viewing, and frame
+  diagnostics. Color TFTs with native RGB565 support bypass palette conversion;
+  monochrome displays retain grayscale rendering. `rtspd` selects compatible
+  audio/video stream IDs explicitly and offers source-aware tab completion.
+- **4.15.7** — 2026-09-30 — Added the `rtspd` job for single-client
+  RTSP publishing with RTP/JPEG video, RTP/L16 PCM audio, and RTCP timing.
+  Explicit `video=` and `audio=` sources support camera-only, audio-only,
+  or combined streams using standard UDP transport. Publishing follows source
+  availability; `fps=0` removes the video rate cap. Runtime buffers are
+  allocated only while the job runs, and stale data is discarded on reconnect.
+- **4.15.6** — 2026-09-30 — Web now plays HTTP MJPEG camera feeds
+  alongside its existing static image formats. Multipart stream detection
+  accepts split headers and common server variations, while bounded frame
+  buffering and cancellation keep live viewing responsive.
+- **4.15.5** — 2026-09-30 — Added the GOOUUU ESP32-S3CAM board,
+  OV2640 JPEG snapshots, and the `camera` command. Exclusive camera leases
+  coordinate capture and streaming, with direct framebuffer DMA to PSRAM.
+  The `cam-webd` job serves JPEG snapshots and a single-client MJPEG feed
+  through asynchronous HTTP routes. Trusted-LAN viewing is unauthenticated
+  by default; `auth=required` enables an optional bearer access code.
+- **4.15.4** — 2026-09-29 — Updated CL-32 support for its current core
+  firmware battery register and serialized ST7305 display transactions. ADC
+  battery monitoring now uses a smoothed voltage trend with hysteresis to avoid
+  erratic charger detection. Files, FTP, and SFTP add `Alt+S` and `AltGr+S`
+  entry search; FTP and SFTP preserve the selected directory when returning to
+  a parent. Tree views in Docs, Flash, and Playground now collapse the current
+  branch with Left even when a leaf is selected.
+- **4.15.3** — 2026-09-29 — Added the built-in `meshcore-ble` job for an
+  external MeshCore companion. It pairs over BLE, synchronizes contacts,
+  channels, and queued messages, and carries direct and group Chat traffic
+  through the existing Contacts, Messages, and Inbox services while leaving
+  the companion's identity and configuration authoritative. The BLE host can
+  keep a keyboard and companion connected together, and native jobs now have
+  an owned multi-peer GATT client ABI with passkey pairing. The gesture binding
+  job is now named `gestures`. To remain within their flash limits, Rover and
+  VGA32 no longer include Bluetooth, and Writerdeck no longer includes offline
+  speech.
+- **4.15.2** — 2026-09-29 — Added the standalone display-shell `deepsleep`
+  command. It stops the ESP32 radios, powers down the primary display, and
+  enters deep sleep with KEY, compatible RTC interrupt, scheduled timer, and
+  RESET wake paths. Wake starts a fresh boot rather than restoring RAM state;
+  this is ESP32 deep sleep, not hardware power-off.
+- **4.15.1** — 2026-09-29 — Suspended devices now resume their configured
+  power profile and display when a remembered BLE keyboard reconnects or sends
+  a new key press. Release-only keyboard reports do not wake the device.
+- **4.15.0** — 2026-09-28 — Added signed native ELF module packages for
+  ESP32-S3 targets with PSRAM. The `pkg` package manager browses the versioned
+  repository, verifies catalog signatures and host compatibility, and
+  atomically installs verified application, job, and driver artifacts.
+  Application modules become shell commands, while resident jobs and expansion
+  drivers register with the normal SolarOS runtime and reactivate during boot.
+  The repository includes source projects for acceptance modules across all
+  three lifecycle paths, and CID can publish their signed catalogs
+  independently of firmware OTA releases.
+- **4.14.1** — 2026-09-26 — Added runtime display layouts: two to four
+  physical displays can be joined into one logical canvas, while one physical
+  display can be split into two independent logical viewports with their own
+  sessions and frame exports. The built-in shell follows layout changes, and
+  `Ctrl+Alt+Arrow` or `Ctrl+AltGr+Arrow` moves local input focus between split
+  screens without interrupting either foreground application. Terminal geometry
+  now uses the full display width at every text size, including unusually wide
+  panels.
+- **4.14.0** — 2026-09-26 — Added the Elecrow CrowPanel ESP32-S3 5.79-inch
+  e-paper target with its 792x272 dual-SSD1683 display, non-flashing partial
+  refresh, microSD, rotary controls, status LED, and expansion interfaces. The
+  writerdeck flavor now focuses on file transfer, editing and reading, Python
+  and Playground, image viewing, audio, and offline speech while omitting
+  hardware-hacking and external-radio packages to fit the 8 MB OTA layout.
+- **4.13.10** — 2026-09-26 — Added `ltop`, a resumable live task monitor for
+  display and port terminals. It shows interval-based CPU load for each core,
+  aggregate CPU load, internal and external memory utilization, and a
+  width-aware task table with current CPU use, state, priority, and peak stack
+  consumption.
+- **4.13.9** — 2026-09-25 — Added the QDtech ES3N28P 2.8-inch target with
+  its 320x240 ILI9341 display, SDMMC storage, ES8311 audio, battery monitor,
+  status pixel, and expansion connectors. Python and Lua applications can now
+  open static PNG, JPEG, GIF, and WebP images as native PSRAM-backed handles
+  and draw them with clipping and nearest-neighbor scaling. View, Web, and
+  Reader now share the native raster blitter for direct color and monochrome
+  output. Full HTTP stream queues now backpressure the native worker until the
+  consumer drains or cancels them instead of terminating the stream.
+- **4.13.8** — 2026-09-25 — Running `ble` without arguments now opens a
+  multi-tab BLE Inspector for scanning and connecting devices, browsing GATT
+  services and characteristics, reading values, and writing hexadecimal data.
+  The inspector exposes BLE keyboard and GATT operation settings, keeps key
+  mnemonics visible, reports scan and connection progress and failures through
+  standard TUI popups, and releases its connection when closed. Existing text
+  subcommands remain available.
+- **4.13.7** — 2026-09-25 — Improved offline PicoTTS playback with deeper
+  buffering and smooth underrun recovery. Agent now preserves raw `ask` prompts,
+  requests tool calls sequentially from Chat Completions-compatible providers,
+  and isolates Python and Lua script runner state from foreground applications.
+  BLE keyboard replacement now removes the previous keyboard bond and recovers
+  conflicting stale bonds, so switching keyboards and pairing again after
+  `ble forget` work reliably.
+- **4.13.6** — 2026-09-22 — Added offline PicoTTS speech with runtime-loaded
+  voice directories, an asynchronous native/Python/Lua service, and the `say`
+  command for text or streaming plain-text files with progress, cancellation,
+  pitch, and speed controls. `agent --tts` can speak final model answers while
+  keeping tool activity and intermediate messages silent. PicoTTS voice assets
+  are included in the repository for copying to device storage but remain
+  outside the firmware image. Python and Lua apps can now discover native and
+  installed Playground apps, hand off to another app, and open supported files
+  or URLs. Their storage APIs add metadata, existence checks, bounded directory
+  enumeration, and recursive directory creation. MicroPython integers now
+  support the signed 64-bit range.
+- **4.13.5** — 2026-09-22 — FTP now starts as a disconnected file manager and
+  opens connection setup with `F2`/`n`; its Copy, Move, Mkdir, and Delete
+  function keys and letter mnemonics now match Files. Added a two-pane `sftp` file
+  manager with the same browsing, recursive copy/move/delete, mkdir, viewing,
+  progress, and cursor-retention behavior over the existing SSH transport and
+  SFTP subsystem. SFTP supports known hosts, host aliases, password or key
+  authentication, an `F2` connection form, and the compatible direct-connect
+  command-line form, including `user@host:path`. Connection forms keep a visible
+  cursor in the active field. FTP and SFTP reopen on the password field when
+  authentication fails instead of exposing a low-level error. FTP reports
+  refused, timed-out, and unreachable connections without a generic ESP error.
+- **4.13.4** — 2026-09-21 — Added a full-screen, overlay-free Palm Graffiti
+  keyboard job with alphanumeric templates, Palm editing gestures, and
+  automatic letter/number selection from the stroke's starting region. It
+  accepts absolute touch devices attached at runtime without taking the
+  foreground application's pointer stream. Added the MGC3130/Skywriter
+  expansion driver with 3D position, absolute hover-pointer, and gesture input.
+  Gesture-capable devices now use a common source class and can bind advertised
+  gestures and directions to shell commands or scripts through the
+  `gesture-listener` job. `input emit` supports modifier chords such as
+  `ALT+RIGHT`, releases synthetic modifiers correctly, and gesture binding
+  completion now suggests live sources and their supported gestures. Idle
+  listeners release their worker stack while preserving bindings.
+- **4.13.3** — 2026-09-21 — Added `sftpsync`, a one-way incremental file and
+  directory updater over a standard SSH server's SFTP subsystem. It supports
+  recursive and dry-run modes, password and key authentication, Python and Lua
+  bindings, per-file progress bars, and cancellation with `Ctrl+C`; matching
+  size/modification-time pairs are skipped and destination-only files are
+  preserved. SIM7670 GNSS startup now waits for the receiver to become ready,
+  configures its positioning mode, and polls for a valid fix for the requested
+  timeout instead of immediately returning the first invalid result. MAX17048
+  battery readings now fetch voltage and state of charge in separate hardware
+  transactions, fixing devices that otherwise reported a constant 100% charge.
+- **4.13.2** — 2026-09-20 — Shell startup now defaults to `auto`: targets
+  with board-owned SD storage use `/sdcard/.shell/startup` when the card mounts
+  and fall back to flash when SD is unavailable. `setterm startup flash` and
+  `setterm startup sd` remain explicit, no-fallback selections, while
+  `setterm startup` reports the configured selection and currently resolved
+  path.
+- **4.13.1** — 2026-09-20 — Expansion driver attachment now offers guided
+  selectors built from the live I/O map. Runtime display drivers register
+  correctly on headless boards, including displays promoted from expansion
+  manifests. The included expansion-export reference manifest combines a
+  fixed CardKB keyboard and SSD1683 display. Compatible buses and pins show
+  their routes and connector positions while excluding claimed resources.
+  The unfinished form is preserved when opening the I/O pin map and bus
+  manager, and manual resource entry remains available.
+  Runtime device details can save their normalized attach command to the
+  selected shell startup script, using the same idempotent startup workflow as
+  runtime buses in I/O. Runtime buses and catalog-backed device attachments can
+  now be exported as an atomic, versioned expansion manifest. The desktop board
+  configurator imports that snapshot, validates it against the recorded base
+  board, and promotes the tested hardware into an inherited board-owned target.
+  Declarative board manifests now also preserve runtime MIDI buses during
+  promotion.
+- **4.13.0** — 2026-09-20 — Added the Waveshare
+  ESP32-S3-SIM7670G-4G V2.0 target with SIM7670G LTE and GNSS, MAX17048
+  battery monitoring, SDMMC storage, a WS2812B status pixel, software modem
+  power/reset control, and the camera-off expansion pin surface. Cellular
+  access now uses modem-independent saved profiles, a status/settings TUI,
+  configurable serial rates, and a reusable PPP service rather than exposing
+  modem-specific AT setup to normal users. The network service now presents a
+  two-tab interface and routing model with persistent uplink priorities,
+  Wi-Fi AP client routing, transport child TUIs, and WireGuard over whichever
+  base path is selected. The new `pppd` job runs PPP over physical or virtual
+  byte-stream ports as an uplink, downstream gateway, or routed peer; active
+  PPP and SLIP links appear in network status. Ping can be stopped with Esc or
+  Ctrl+C. Runtime metadata and the PPP monitor prefer PSRAM with safe internal
+  fallback, the Network TUI no longer exhausts small foreground stacks, and
+  runtime SSD1683 displays register correctly on headless boards.
+- **4.12.2** — 2026-09-18 — Added an optional persistent BLE keyboard
+  keepalive that periodically sends HID Exit Suspend, with a readable HID
+  Information fallback and visible local attempt status. Keyboard Battery
+  Service support now reads the initial level, follows notifications, and
+  includes the latest percentage in shell, Python, and Lua BLE status output.
+  Keepalive remains disabled by default because keyboard power policy is
+  device-specific.
+- **4.12.1** — 2026-09-18 — Edit now asks whether to save or discard pending
+  changes before quitting. Files retains its function-key map while adding
+  View, Edit, Copy, Move, Mkdir, Delete, and Zip letter shortcuts, with their
+  mnemonic characters emphasized in the help bar.
+- **4.12.0** — 2026-09-17 — Added the LilyGO T-Deck Plus target with its
+  320x240 ST7789 display, GT911 touch controller, raw-matrix keyboard,
+  five-way trackball, microSD slot, I2S speaker output, ES7210 microphone
+  input, SX1262 radio, MIA-M10Q GNSS receiver, battery monitor, native USB
+  CDC, Wi-Fi, and BLE. The new display, touch, keyboard, audio, and microphone
+  paths use reusable expansion drivers and resource-managed bindings. GT911
+  attachments can declare and probe both common strap addresses while claiming
+  both addresses before startup. T-LoRa-Pager now sequences shared-SPI startup
+  safely, keeps GNSS and NFC registry state in internal memory, uploads
+  BHI260AP firmware without truncating 256-byte I2C transfers, and waits for
+  the MIA-M10Q to become responsive during startup.
+- **4.11.2** — 2026-09-17 — Added a native composite BLE HID peripheral API
+  for Python and Lua applications. SolarOS devices can now advertise as a
+  bonded and encrypted keyboard, mouse, and gamepad, send typed input reports,
+  receive keyboard LED state, and clean up connections automatically when an
+  application exits. Configured peripheral names now remain consistent after
+  a host resolves the GATT device name. HID pairing passkeys are delivered to
+  applications without interrupting remembered keyboard reconnects, and stale
+  host bonds can be replaced without forgetting the physical keyboard. Python
+  startup failures caused by fragmented internal memory now report the
+  available and largest blocks and expose task-stack admission diagnostics
+  through `mem policy`. Hardware commands now complete their GNSS, NFC, IMU,
+  haptic, and charger subcommands and report explicitly when no matching
+  hardware provider is registered.
+- **4.11.1** — 2026-09-15 — Added T-LoRa-Pager support for the u-blox
+  MIA-M10Q GNSS receiver, ST25R3916 NFC-A reader, BHI260AP six-axis IMU,
+  XL9555 GPIO expander, DRV2605 haptic controller, and BQ25896 battery
+  charger. GNSS, NFC, IMU, haptic, charger, temperature, and humidity access
+  now use driver-agnostic services with matching shell and Python/Lua APIs.
+  Pager power rails are modeled as XL9555 GPIO lines: GNSS and NFC remain off
+  until requested, while SD power and its pull-up are enabled for reliable
+  mounting. Hardware-provider registry state now uses PSRAM where available,
+  preserving internal memory on targets that do not use these peripherals.
+  The Python and Lua manuals were split into focused topic pages for easier
+  navigation and agent lookup.
 - **4.11.0** — 2026-09-12 — Replaced the Bluedroid BLE backend with
   NimBLE, reducing internal RAM use while retaining BLE keyboard pairing,
   reconnect, and sleep/wake support. Python and Lua applications can now

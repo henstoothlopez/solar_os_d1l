@@ -11,8 +11,11 @@
 
 #define TEST_SESSION_COUNT 16
 size_t solar_os_ble_backend_capacity(void) { return 1; }
-static uint32_t fake_server_owner, fake_server_id;
+static uint32_t fake_server_owner, fake_server_id, fake_hid_owner;
 static solar_os_ble_server_request_t fake_server_request;
+static solar_os_ble_hid_request_t fake_hid_request;
+static solar_os_ble_hid_device_event_t fake_hid_event;
+static bool fake_hid_event_ready;
 esp_err_t solar_os_ble_backend_server_request(solar_os_ble_session_t owner, solar_os_ble_server_request_t *r)
 {
     if (r->op == SOLAR_OS_BLE_SERVER_CREATE) fake_server_owner = owner;
@@ -24,8 +27,34 @@ esp_err_t solar_os_ble_backend_server_request(solar_os_ble_session_t owner, sola
     if (r->op == SOLAR_OS_BLE_SERVER_CLOSE) fake_server_owner = 0;
     return ESP_OK;
 }
+esp_err_t solar_os_ble_backend_hid_request(solar_os_ble_session_t owner,
+                                           solar_os_ble_hid_request_t *r)
+{
+    if (r->op == SOLAR_OS_BLE_HID_OP_START) fake_hid_owner = owner;
+    if (owner != fake_hid_owner) return ESP_ERR_INVALID_STATE;
+    fake_hid_request = *r;
+    if (r->op == SOLAR_OS_BLE_HID_OP_STATUS) {
+        r->info.event_capacity = 16;
+        strcpy(r->info.host_name, "Desktop");
+    }
+    if (r->op == SOLAR_OS_BLE_HID_OP_HOSTS) {
+        r->host_count = 1;
+        r->hosts[0] = (solar_os_ble_hid_host_t){.bda={1,2,3,4,5,6},.addr_type=1,
+            .connected=true,.name="Desktop"};
+    }
+    if (r->op == SOLAR_OS_BLE_HID_OP_POLL) {
+        if (!fake_hid_event_ready) return ESP_ERR_NOT_FOUND;
+        r->event = fake_hid_event;
+        fake_hid_event_ready = false;
+    }
+    if (r->op == SOLAR_OS_BLE_HID_OP_STOP) fake_hid_owner = 0;
+    return ESP_OK;
+}
 void solar_os_ble_backend_server_cancel(solar_os_ble_session_t owner)
-{ if (!owner || owner == fake_server_owner) fake_server_owner = 0; }
+{
+    if (!owner || owner == fake_server_owner) fake_server_owner = 0;
+    if (!owner || owner == fake_hid_owner) fake_hid_owner = 0;
+}
 
 static pthread_mutex_t fake_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t fake_changed = PTHREAD_COND_INITIALIZER;
@@ -219,6 +248,18 @@ esp_err_t solar_os_ble_backend_write(uint32_t epoch, uint32_t request, uint16_t 
     return ESP_OK;
 }
 
+esp_err_t solar_os_ble_backend_pair(uint32_t epoch, uint32_t request, uint32_t passkey)
+{
+    solar_os_ble_backend_event_t event = {
+        .type = SOLAR_OS_BLE_BACKEND_PAIRED, .epoch = epoch, .request = request,
+        .conn_id = 7, .encrypted = true, .bonded = true,
+    };
+    assert(passkey <= 999999U);
+    record(event);
+    solar_os_ble_service_event(&event);
+    return ESP_OK;
+}
+
 esp_err_t solar_os_ble_backend_subscribe(uint32_t epoch, uint32_t request, uint16_t handle, uint8_t mode)
 {
     solar_os_ble_backend_event_t e = {.type=SOLAR_OS_BLE_BACKEND_SUBSCRIBED,
@@ -357,6 +398,10 @@ int main(void)
     solar_os_ble_session_info_t info;
     assert(solar_os_ble_session_get_info(ids[0], &info) == ESP_OK);
     assert(info.gatt.connected && info.gatt.mtu == 247 && info.gatt.conn_id == 7);
+    assert(solar_os_ble_session_pair(ids[0], 1000000U, 100) == ESP_ERR_INVALID_ARG);
+    assert(solar_os_ble_session_pair(ids[0], 123456U, 100) == ESP_OK);
+    assert(solar_os_ble_session_get_info(ids[0], &info) == ESP_OK &&
+           info.gatt.encrypted && info.gatt.bonded);
     assert(info.gatt.service_count == SOLAR_OS_BLE_GATT_MAX_SERVICES);
     solar_os_ble_scan_result_t scan;
     size_t found = 123;
@@ -465,6 +510,7 @@ int main(void)
     /* The reserved compatibility client still works when app slots are released. */
     defer_read = false;
     assert(solar_os_ble_gatt_connect(peer, SOLAR_OS_BLE_ADDR_RANDOM, 100) == ESP_OK);
+    assert(solar_os_ble_gatt_pair(123456U, 100) == ESP_OK);
     assert(solar_os_ble_gatt_read(3, value, 2, &count, 100) == ESP_OK);
     assert(solar_os_ble_gatt_disconnect() == ESP_OK);
     retired();

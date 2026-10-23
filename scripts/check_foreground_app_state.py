@@ -19,23 +19,12 @@ STATIC_START = re.compile(r"^\s*static\b")
 CONST_TOKEN = re.compile(r"\bconst\b")
 FUNCTION_DECLARATION = re.compile(r"^[^=;{}]*\([^;{}]*\)\s*(?:;|\{)")
 
-APP_HELPERS = (
-    "solar_os_gameboy_audio.c",
-    "solar_os_gameboy_presenter.c",
-)
-
-
 def foreground_sources(repository: Path) -> list[Path]:
-    apps = repository / "src" / "apps"
     sources = [
         path
         for path in sorted((repository / "src").rglob("*.c"))
         if APP_DESCRIPTOR.search(path.read_text(encoding="utf-8"))
     ]
-    for name in APP_HELPERS:
-        path = apps / name
-        if path.exists() and path not in sources:
-            sources.append(path)
     return sorted(sources)
 
 
@@ -104,7 +93,9 @@ def lifecycle_bypasses(repository: Path) -> list[str]:
         for line_number, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
-            if callback.search(line):
+            # Device/service operation tables also conventionally expose
+            # start/stop hooks. They are not foreground app descriptors.
+            if callback.search(line) and ".ops->" not in line:
                 errors.append(
                     f"{path.relative_to(repository)}:{line_number}: "
                     "foreground callback bypasses solar_os_app_start/stop"

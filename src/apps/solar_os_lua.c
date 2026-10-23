@@ -22,9 +22,28 @@
 #include "lualib.h"
 #include "solar_os_app_registry.h"
 #include "solar_os_config.h"
+#if SOLAR_OS_PACKAGE_SERVICE_EMOTION
+#include "solar_os_emotion.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_INPUT_KEYMAP
+#include "solar_os_input_keymap.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_MESSAGING
 #include "solar_os_contacts.h"
+#endif
 #include "solar_os_memory.h"
+#if SOLAR_OS_PACKAGE_SERVICE_DLP_CLIENT
+#include "solar_os_display_link.h"
+#endif
+#include "solar_os_tcp_stream.h"
+#include "solar_os_ble_stream.h"
+#include "solar_os_script_media.h"
+#if SOLAR_OS_PACKAGE_SERVICE_CAMERA
+#include "solar_os_camera.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_MESSAGING
 #include "solar_os_messaging.h"
+#endif
 #include "solar_os_task.h"
 #include "solar_os_rtc.h"
 #include "solar_os_schedule.h"
@@ -40,6 +59,9 @@
 #if SOLAR_OS_PACKAGE_SERVICE_AUDIO
 #include "solar_os_audio.h"
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_SPEECH
+#include "solar_os_speech.h"
+#endif
 
 #if SOLAR_OS_PACKAGE_SERVICE_SYNTH
 #include "solar_os_synth_voice.h"
@@ -49,6 +71,7 @@
 #endif
 #if SOLAR_OS_PACKAGE_SERVICE_BLE
 #include "solar_os_ble_keyboard.h"
+#include "solar_os_hid.h"
 #endif
 #if SOLAR_OS_PACKAGE_SERVICE_RESOURCES
 #include "solar_os_buses.h"
@@ -56,6 +79,9 @@
 #include "solar_os_clipboard.h"
 #include "solar_os_display.h"
 #include "solar_os_gfx.h"
+#if SOLAR_OS_PACKAGE_SERVICE_IMAGE
+#include "solar_os_raster_image.h"
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_GPIO
 #include "solar_os_gpio.h"
 #endif
@@ -66,6 +92,9 @@
 #if SOLAR_OS_PACKAGE_SERVICE_FTP
 #include "solar_os_ftp.h"
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_SFTPSYNC
+#include "solar_os_sftpsync.h"
+#endif
 #if SOLAR_OS_PACKAGE_SERVICE_HID
 #include "solar_os_hid.h"
 #endif
@@ -74,6 +103,27 @@
 #endif
 #if SOLAR_OS_PACKAGE_SERVICE_EXPANSION
 #include "solar_os_expansion.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_GNSS
+#include "solar_os_gnss.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_HAPTIC
+#include "solar_os_haptic.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_MOTOR
+#include "solar_os_motor.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_ENCODER
+#include "solar_os_encoder.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_CHARGER
+#include "solar_os_charger.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_IMU
+#include "solar_os_imu.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_NFC
+#include "solar_os_nfc.h"
 #endif
 #if SOLAR_OS_PACKAGE_EXPANSION_NEOPIXEL
 #include "solar_os_neopixel.h"
@@ -91,6 +141,7 @@
 #if SOLAR_OS_PACKAGE_SERVICE_NET
 #include "solar_os_net.h"
 #include "solar_os_net_session.h"
+#include "solar_os_network.h"
 #endif
 #if SOLAR_OS_PACKAGE_SERVICE_SSH
 #include "solar_os_ssh_keys.h"
@@ -108,6 +159,9 @@
 #include "solar_os_script_lifecycle.h"
 #if SOLAR_OS_PACKAGE_SERVICE_PWM
 #include "solar_os_pwm.h"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_SERVO
+#include "solar_os_servo.h"
 #endif
 #if SOLAR_OS_PACKAGE_SERVICE_SENSORS
 #include "solar_os_sensors.h"
@@ -141,6 +195,7 @@
 #define SOLUA_INPUT_QUEUE_LEN 4
 #define SOLUA_KEY_QUEUE_LEN 32
 #define SOLUA_EVENT_DATA_MAX 128
+#define SOLUA_RASTER_IMAGE_MAX 16
 #define SOLUA_REPL_INPUT_MAX 256
 #define SOLUA_TASK_STACK 12288
 SOLAR_OS_TASK_REQUIRE_FOREGROUND_STACK(SOLUA_TASK_STACK);
@@ -178,6 +233,7 @@ typedef enum {
     SOLUA_EVENT_TUI_HELP,
     SOLUA_EVENT_TUI_TAB,
     SOLUA_EVENT_TUI_INPUT,
+    SOLUA_EVENT_EMOTION_MODE,
     SOLUA_EVENT_GFX_BEGIN,
     SOLUA_EVENT_GFX_END,
     SOLUA_EVENT_GFX_CLEAR,
@@ -192,6 +248,7 @@ typedef enum {
     SOLUA_EVENT_GFX_FILL_CIRCLE,
     SOLUA_EVENT_GFX_ICON,
     SOLUA_EVENT_GFX_BITMAP,
+    SOLUA_EVENT_IMAGE_DRAW,
     SOLUA_EVENT_GFX_TEXT,
     SOLUA_EVENT_DONE,
 } solua_event_type_t;
@@ -215,6 +272,7 @@ typedef struct {
     int32_t x1;
     int32_t y1;
     uint32_t attr;
+    uintptr_t object;
     char data[SOLUA_EVENT_DATA_MAX];
 } solua_event_t;
 
@@ -255,6 +313,9 @@ typedef struct {
     solar_os_gfx_t *claimed_gfx;
     char gfx_target[SOLAR_OS_DISPLAY_TARGET_NAME_MAX];
     char gfx_owner[SOLAR_OS_DISPLAY_TARGET_OWNER_MAX];
+#if SOLAR_OS_PACKAGE_SERVICE_IMAGE
+    solar_os_raster_image_t *images[SOLUA_RASTER_IMAGE_MAX];
+#endif
     size_t repl_input_len;
     size_t repl_input_cursor;
     size_t repl_input_row;
@@ -262,6 +323,7 @@ typedef struct {
 } solua_state_t;
 
 static const char *TAG = "solar_os_lua";
+static bool solua_emotion_drawing(void);
 
 typedef enum {
     SOLUA_RUNTIME_OWNER_NONE,
@@ -275,15 +337,26 @@ typedef struct {
     solar_os_midi_subscription_t midi_subscription;
     bool midi_subscribed;
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_DLP_CLIENT
+    solar_os_display_link_t *dlp_links[4];
+    uint32_t dlp_generation[4];
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_EMOTION
+    solar_os_emotion_t *emotions[4];
+    uint32_t emotion_generation[4];
+    bool emotion_busy, emotion_ack, emotion_suspended;
+    uint32_t emotion_count;
+#endif
 } solua_cold_state_t;
 
-static void *solua_state;
-#define solua (((solua_cold_state_t *)solua_state)->app)
+static void *solua_app_state;
+static solua_cold_state_t *solua_runtime_state;
+#define solua (solua_runtime_state->app)
 #if SOLAR_OS_PACKAGE_SERVICE_MIDI
 #define solua_midi_subscription \
-    (((solua_cold_state_t *)solua_state)->midi_subscription)
+    (solua_runtime_state->midi_subscription)
 #define solua_midi_subscribed \
-    (((solua_cold_state_t *)solua_state)->midi_subscribed)
+    (solua_runtime_state->midi_subscribed)
 #endif
 static solar_os_script_run_control_t *solua_runner_control;
 SOLAR_OS_APP_STATIC_SRAM_EXCEPTION("runtime ownership spinlock")
@@ -318,6 +391,7 @@ static void solua_runtime_release(solua_runtime_owner_t owner)
     portENTER_CRITICAL(&solua_runtime_lock);
     if (solua_runtime_owner == owner) {
         solua_runtime_owner = SOLUA_RUNTIME_OWNER_NONE;
+        solua_runtime_state = NULL;
         solua_tick_interval_ms = 0;
     }
     portEXIT_CRITICAL(&solua_runtime_lock);
@@ -371,8 +445,9 @@ static void solua_return_to_shell(solar_os_context_t *ctx,
                                   int exit_code,
                                   const char *message)
 {
-    const bool shared_port = solar_os_shell_io_kind(solua_io(ctx)) ==
-        SOLAR_OS_SHELL_IO_KIND_PORT;
+    solar_os_shell_io_t *io = solar_os_context_shell_io(ctx);
+    const bool shared_port = io != NULL &&
+        solar_os_shell_io_kind(io) == SOLAR_OS_SHELL_IO_KIND_PORT;
     solar_os_context_finish(ctx,
                                          exit_code,
                                          shared_port ? NULL : message);
@@ -783,6 +858,27 @@ static void solua_push_storage_usage(lua_State *L, const solar_os_storage_usage_
     solua_set_int(L, -1, "free_bytes", (lua_Integer)usage->free_bytes);
 }
 
+static void solua_push_storage_metadata(lua_State *L,
+                                        const solar_os_storage_metadata_t *metadata)
+{
+    lua_newtable(L);
+    solua_set_str(L, -1, "type", solar_os_storage_entry_type_name(metadata->type));
+    solua_set_bool(L, -1, "is_file", metadata->type == SOLAR_OS_STORAGE_ENTRY_FILE);
+    solua_set_bool(L,
+                   -1,
+                   "is_dir",
+                   metadata->type == SOLAR_OS_STORAGE_ENTRY_DIRECTORY);
+    solua_set_int(L, -1, "size", (lua_Integer)metadata->size_bytes);
+    solua_set_int(L, -1, "mtime", (lua_Integer)metadata->modified_seconds);
+    solua_set_int(L, -1, "mode", (lua_Integer)metadata->mode);
+}
+
+static void solua_push_storage_entry(lua_State *L, const solar_os_storage_entry_t *entry)
+{
+    solua_push_storage_metadata(L, &entry->metadata);
+    solua_set_str(L, -1, "name", entry->name);
+}
+
 static void solua_push_storage_block(lua_State *L, const solar_os_storage_block_t *block)
 {
     lua_newtable(L);
@@ -1004,12 +1100,20 @@ static void solua_push_adc_sample(lua_State *L, const solar_os_adc_sample_t *sam
 static void solua_push_pwm_info(lua_State *L, const solar_os_pwm_pin_info_t *info)
 {
     lua_newtable(L);
+    solua_set_str(L, -1, "provider", info->provider);
+    solua_set_int(L, -1, "output", info->output);
+    solua_set_int(L, -1, "frequency_group", info->frequency_group);
+    solua_set_str(L, -1, "owner", info->owner);
     solua_set_int(L, -1, "pin", info->pin);
     solua_set_bool(L, -1, "allowed", info->runtime_allowed);
     solua_set_bool(L, -1, "active", info->active);
     solua_set_int(L, -1, "channel", info->channel);
     solua_set_int(L, -1, "freq_hz", info->freq_hz);
     solua_set_int(L, -1, "duty_percent", info->duty_percent);
+    solua_set_bool(L, -1, "enabled", info->enabled);
+    solua_set_bool(L, -1, "reserved", info->reserved);
+    solua_set_int(L, -1, "resolution_bits", info->resolution_bits);
+    solua_set_int(L, -1, "pulse_width_us", info->pulse_width_us);
 }
 #endif
 
@@ -1201,14 +1305,70 @@ static int solua_solaros_wifi_status_short(lua_State *L)
 #endif
 
 #if SOLAR_OS_PACKAGE_SERVICE_SENSORS
+static int solua_sensors_list(lua_State *L)
+{
+    lua_newtable(L);
+    solar_os_sensor_info_t info;
+    for (size_t i = 0; solar_os_sensors_get(i, &info); i++) {
+        lua_newtable(L);
+        solua_set_str(L, -1, "name", info.name);
+        solua_set_str(L, -1, "driver", info.driver);
+        solua_set_bool(
+            L,
+            -1,
+            "temperature",
+            (info.capabilities & SOLAR_OS_SENSOR_CAP_TEMPERATURE) != 0U);
+        solua_set_bool(
+            L,
+            -1,
+            "humidity",
+            (info.capabilities & SOLAR_OS_SENSOR_CAP_HUMIDITY) != 0U);
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static const char *solua_optional_sensor_name(lua_State *L)
+{
+    return lua_isnoneornil(L, 1) ? NULL : luaL_checkstring(L, 1);
+}
+
 static int solua_solaros_environment(lua_State *L)
 {
     solar_os_environment_t environment;
-    if (solar_os_sensors_read_environment(&environment) != ESP_OK) {
+    const char *name = solua_optional_sensor_name(L);
+    const esp_err_t ret = name != NULL ?
+        solar_os_sensors_read_environment_from(name, &environment) :
+        solar_os_sensors_read_environment(&environment);
+    if (ret != ESP_OK) {
         lua_pushnil(L);
         return 1;
     }
     solua_push_environment(L, &environment);
+    return 1;
+}
+
+static int solua_sensors_temperature(lua_State *L)
+{
+    float value = 0.0f;
+    if (solar_os_sensors_read_temperature(
+            solua_optional_sensor_name(L), &value) != ESP_OK) {
+        lua_pushnil(L);
+    } else {
+        lua_pushnumber(L, value);
+    }
+    return 1;
+}
+
+static int solua_sensors_humidity(lua_State *L)
+{
+    float value = 0.0f;
+    if (solar_os_sensors_read_humidity(
+            solua_optional_sensor_name(L), &value) != ESP_OK) {
+        lua_pushnil(L);
+    } else {
+        lua_pushnumber(L, value);
+    }
     return 1;
 }
 #endif
@@ -1267,6 +1427,83 @@ static int solua_storage_resolve(lua_State *L)
     return 1;
 }
 
+static int solua_storage_stat(lua_State *L)
+{
+    char path[SOLAR_OS_STORAGE_PATH_MAX];
+    solua_resolve_path(L, 1, path, sizeof(path));
+    solar_os_storage_metadata_t metadata;
+    (void)solua_check_esp(L, solar_os_storage_stat(path, &metadata));
+    solua_push_storage_metadata(L, &metadata);
+    return 1;
+}
+
+static int solua_storage_exists(lua_State *L)
+{
+    char path[SOLAR_OS_STORAGE_PATH_MAX];
+    solua_resolve_path(L, 1, path, sizeof(path));
+    bool exists = false;
+    (void)solua_check_esp(L, solar_os_storage_exists(path, &exists));
+    lua_pushboolean(L, exists);
+    return 1;
+}
+
+static int solua_storage_scandir(lua_State *L)
+{
+    size_t cursor = 0U;
+    if (!lua_isnoneornil(L, 2)) {
+        const lua_Integer value = luaL_checkinteger(L, 2);
+        if (value < 0) {
+            return luaL_error(L, "cursor must be non-negative");
+        }
+        cursor = (size_t)value;
+    }
+
+    const uint32_t limit = solua_optional_u32(L, 3, 32U);
+    if (limit == 0U || limit > SOLAR_OS_STORAGE_SCANDIR_MAX_LIMIT) {
+        return luaL_error(L, "limit must be 1..128");
+    }
+
+    char path[SOLAR_OS_STORAGE_PATH_MAX];
+    solua_resolve_path(L, 1, path, sizeof(path));
+    solar_os_storage_entry_t *entries = solar_os_memory_alloc(
+        sizeof(*entries) * limit,
+        SOLAR_OS_MEMORY_TRANSIENT,
+        "lua.scandir");
+    if (entries == NULL) {
+        return solua_check_esp(L, ESP_ERR_NO_MEM);
+    }
+
+    size_t entry_count = 0U;
+    size_t next_cursor = cursor;
+    bool has_more = false;
+    const esp_err_t err = solar_os_storage_scandir(path,
+                                                   cursor,
+                                                   limit,
+                                                   entries,
+                                                   &entry_count,
+                                                   &next_cursor,
+                                                   &has_more);
+    if (err != ESP_OK) {
+        solar_os_memory_free(entries);
+        return solua_check_esp(L, err);
+    }
+
+    lua_newtable(L);
+    const int result = lua_gettop(L);
+    lua_newtable(L);
+    const int list = lua_gettop(L);
+    for (size_t i = 0U; i < entry_count; i++) {
+        solua_push_storage_entry(L, &entries[i]);
+        lua_rawseti(L, list, (lua_Integer)i + 1);
+    }
+    solar_os_memory_free(entries);
+    lua_setfield(L, result, "entries");
+    if (has_more) {
+        solua_set_int(L, result, "next_cursor", (lua_Integer)next_cursor);
+    }
+    return 1;
+}
+
 static int solua_storage_read_file(lua_State *L)
 {
     const uint32_t max_bytes = solua_optional_u32(L, 2, 4096U);
@@ -1296,6 +1533,22 @@ static int solua_storage_read_file(lua_State *L)
 
     lua_pushlstring(L, (const char *)data, read_len);
     solar_os_memory_free(data);
+    return 1;
+}
+
+static int solua_storage_write_file(lua_State *L)
+{
+    size_t data_len = 0U;
+    const char *data = luaL_checklstring(L, 2, &data_len);
+    if (data_len > SOLAR_OS_STORAGE_WRITE_MAX_BYTES) {
+        return luaL_error(L, "data exceeds 65536 bytes");
+    }
+
+    char path[SOLAR_OS_STORAGE_PATH_MAX];
+    solua_resolve_path(L, 1, path, sizeof(path));
+    const bool append = lua_toboolean(L, 3);
+    (void)solua_check_esp(L, solar_os_storage_write_file(path, data, data_len, append));
+    lua_pushinteger(L, (lua_Integer)data_len);
     return 1;
 }
 
@@ -1364,6 +1617,14 @@ static int solua_storage_mkdir(lua_State *L)
     char path[SOLAR_OS_STORAGE_PATH_MAX];
     solua_resolve_path(L, 1, path, sizeof(path));
     return solua_check_esp(L, solar_os_storage_mkdir(path));
+}
+
+static int solua_storage_makedirs(lua_State *L)
+{
+    char path[SOLAR_OS_STORAGE_PATH_MAX];
+    solua_resolve_path(L, 1, path, sizeof(path));
+    const bool exist_ok = lua_isnoneornil(L, 2) || lua_toboolean(L, 2);
+    return solua_check_esp(L, solar_os_storage_makedirs(path, exist_ok));
 }
 
 static int solua_storage_rmdir(lua_State *L)
@@ -3372,14 +3633,42 @@ static int solua_osc_limits(lua_State *L)
 #endif
 
 #if SOLAR_OS_PACKAGE_SERVICE_PWM
+static solar_os_pwm_output_t solua_pwm_output(lua_State *L, int index)
+{
+    solar_os_pwm_output_t output;
+    if (lua_type(L, index) == LUA_TSTRING) {
+        if (!solar_os_pwm_parse_output(luaL_checkstring(L, index), &output)) {
+            luaL_error(L, "expected provider:output");
+        }
+    } else {
+        output = (solar_os_pwm_output_t){.provider = "native", .output = (uint16_t)solua_check_gpio_pin(L, index)};
+    }
+    return output;
+}
+
+static int solua_pwm_providers(lua_State *L)
+{
+    lua_newtable(L);
+    solar_os_pwm_provider_info_t info;
+    for (size_t i = 0; solar_os_pwm_get_provider(i, &info); i++) {
+        lua_newtable(L);
+        solua_set_str(L, -1, "name", info.name);
+        solua_set_str(L, -1, "driver", info.driver);
+        solua_set_int(L, -1, "outputs", info.output_count);
+        solua_set_bool(L, -1, "detachable", info.detachable);
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
 static int solua_pwm_status(lua_State *L)
 {
     lua_newtable(L);
     const int list = lua_gettop(L);
     int out = 1;
-    for (size_t i = 0; i < solar_os_pwm_pin_count(); i++) {
+    for (size_t i = 0; i < solar_os_pwm_output_count(); i++) {
         solar_os_pwm_pin_info_t info;
-        if (solar_os_pwm_get_pin_info(i, &info)) {
+        if (solar_os_pwm_get_output_info(i, &info)) {
             solua_push_pwm_info(L, &info);
             lua_rawseti(L, list, out++);
         }
@@ -3393,15 +3682,205 @@ static int solua_pwm_set(lua_State *L)
     if (duty_percent > SOLAR_OS_PWM_DUTY_MAX_PERCENT) {
         return luaL_error(L, "expected duty 0..100");
     }
-    return solua_check_esp(L,
-                           solar_os_pwm_set(solua_check_gpio_pin(L, 1),
-                                            solua_check_u32(L, 2),
-                                            (uint8_t)duty_percent));
+    const solar_os_pwm_output_t output = solua_pwm_output(L, 1);
+    return solua_check_esp(L, solar_os_pwm_set_output(&output, solua_check_u32(L, 2), duty_percent, false));
 }
 
 static int solua_pwm_off(lua_State *L)
 {
-    return solua_check_esp(L, solar_os_pwm_stop(solua_check_gpio_pin(L, 1)));
+    const solar_os_pwm_output_t output = solua_pwm_output(L, 1);
+    return solua_check_esp(L, solar_os_pwm_stop_output(&output));
+}
+
+static int solua_pwm_pulse(lua_State *L)
+{
+    const solar_os_pwm_output_t output = solua_pwm_output(L, 1);
+    return solua_check_esp(L, solar_os_pwm_set_output(&output, solua_check_u32(L, 2), solua_check_u32(L, 3), true));
+}
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_ENCODER
+static void solua_push_encoder_info(lua_State *L, const solar_os_encoder_info_t *info)
+{
+    lua_newtable(L);
+    solua_set_str(L, -1, "name", info->name);
+    solua_set_str(L, -1, "driver", info->driver);
+    solua_set_int(L, -1, "mode", info->mode);
+    solua_set_bool(L, -1, "can_reset", info->can_reset);
+}
+
+static int solua_encoder_list(lua_State *L)
+{
+    lua_newtable(L);
+    const int list = lua_gettop(L);
+    solar_os_encoder_info_t info;
+    for (size_t i = 0; solar_os_encoder_get(i, &info); i++) {
+        solua_push_encoder_info(L, &info);
+        lua_rawseti(L, list, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static int solua_encoder_status(lua_State *L)
+{
+    solar_os_encoder_status_t status;
+    (void)solua_check_esp(L, solar_os_encoder_status(luaL_checkstring(L, 1), &status));
+    solua_push_encoder_info(L, &status.info);
+    solua_set_int(L, -1, "count", status.count);
+    return 1;
+}
+
+static int solua_encoder_read(lua_State *L)
+{
+    int32_t count;
+    (void)solua_check_esp(L, solar_os_encoder_read(luaL_checkstring(L, 1), &count));
+    lua_pushinteger(L, count);
+    return 1;
+}
+
+static int solua_encoder_reset(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_encoder_reset(luaL_checkstring(L, 1)));
+}
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_MOTOR
+static void solua_push_motor_info(lua_State *L, const solar_os_motor_info_t *info)
+{
+    lua_newtable(L);
+    solua_set_str(L, -1, "name", info->name);
+    solua_set_str(L, -1, "driver", info->driver);
+    solua_set_bool(L, -1, "can_drive", info->can_drive);
+    solua_set_bool(L, -1, "can_brake", info->can_brake);
+    solua_set_bool(L, -1, "can_clear", info->can_clear);
+}
+
+static int solua_motor_list(lua_State *L)
+{
+    lua_newtable(L);
+    const int list = lua_gettop(L);
+    solar_os_motor_info_t info;
+    for (size_t i = 0; solar_os_motor_get(i, &info); i++) {
+        solua_push_motor_info(L, &info);
+        lua_rawseti(L, list, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static int solua_motor_status(lua_State *L)
+{
+    solar_os_motor_status_t status;
+    (void)solua_check_esp(L, solar_os_motor_status(luaL_checkstring(L, 1), &status));
+    solua_push_motor_info(L, &status.info);
+    solua_set_str(L, -1, "mode", solar_os_motor_mode_name(status.mode));
+    solua_set_bool(L, -1, "drive_valid", status.drive_valid);
+    solua_set_num(L, -1, "drive", status.drive);
+    solua_set_bool(L, -1, "voltage_valid", status.voltage_valid);
+    solua_set_int(L, -1, "voltage_mv", status.voltage_mv);
+    solua_set_int(L, -1, "faults", status.faults);
+    solua_set_int(L, -1, "blocking_faults", status.blocking_faults);
+    solua_set_bool(L, -1, "fault_input_present", status.fault_input_present);
+    solua_set_bool(L, -1, "fault_input_asserted", status.fault_input_asserted);
+    solua_set_bool(L, -1, "raw_valid", status.raw_valid);
+    solua_set_int(L, -1, "raw_control", status.raw_control);
+    solua_set_int(L, -1, "raw_fault", status.raw_fault);
+    return 1;
+}
+
+static int solua_motor_drive(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_motor_drive(luaL_checkstring(L, 1), (float)luaL_checknumber(L, 2)));
+}
+
+static int solua_motor_coast(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_motor_coast(luaL_checkstring(L, 1)));
+}
+
+static int solua_motor_brake(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_motor_brake(luaL_checkstring(L, 1)));
+}
+
+static int solua_motor_clear(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_motor_clear(luaL_checkstring(L, 1)));
+}
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_SERVO
+static void solua_push_servo_info(lua_State *L, const solar_os_servo_info_t *info)
+{
+    lua_newtable(L);
+    solua_set_str(L, -1, "name", info->name);
+    solua_set_str(L, -1, "owner", info->owner);
+    char output[SOLAR_OS_PWM_ENDPOINT_MAX];
+    solar_os_pwm_format_output(&info->config.output, output, sizeof(output));
+    solua_set_str(L, -1, "output", output);
+    solua_set_int(L, -1, "freq_hz", info->config.freq_hz);
+    solua_set_int(L, -1, "pulse_min_us", info->config.pulse_min_us);
+    solua_set_int(L, -1, "pulse_max_us", info->config.pulse_max_us);
+    solua_set_num(L, -1, "angle_min_deg", info->config.angle_min_deg);
+    solua_set_num(L, -1, "angle_max_deg", info->config.angle_max_deg);
+    solua_set_bool(L, -1, "inverted", info->config.inverted);
+    solua_set_bool(L, -1, "enabled", info->enabled);
+    solua_set_bool(L, -1, "has_command", info->has_command);
+    solua_set_int(L, -1, "commanded_pulse_us", info->commanded_pulse_us);
+    solua_set_num(L, -1, "commanded_angle_deg", info->commanded_angle_deg);
+}
+
+static int solua_servo_list(lua_State *L)
+{
+    lua_newtable(L);
+    const int list = lua_gettop(L);
+    solar_os_servo_info_t info;
+    for (size_t i = 0; solar_os_servo_get(i, &info); i++) {
+        solua_push_servo_info(L, &info);
+        lua_rawseti(L, list, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static int solua_servo_status(lua_State *L)
+{
+    solar_os_servo_info_t info;
+    (void)solua_check_esp(L, solar_os_servo_status(luaL_checkstring(L, 1), &info));
+    solua_push_servo_info(L, &info);
+    return 1;
+}
+
+static int solua_servo_open(lua_State *L)
+{
+    const solar_os_servo_config_t config = {
+        .output = solua_pwm_output(L, 2),
+        .pulse_min_us = solua_check_u32(L, 3),
+        .pulse_max_us = solua_check_u32(L, 4),
+        .angle_min_deg = (float)luaL_checknumber(L, 5),
+        .angle_max_deg = (float)luaL_checknumber(L, 6),
+        .freq_hz = lua_isnoneornil(L, 7) ? SOLAR_OS_SERVO_FREQ_DEFAULT_HZ : solua_check_u32(L, 7),
+        .inverted = lua_toboolean(L, 8) != 0,
+    };
+    return solua_check_esp(L, solar_os_servo_open(luaL_checkstring(L, 1), "lua", &config));
+}
+
+static int solua_servo_set(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_servo_set(luaL_checkstring(L, 1), "lua", (float)luaL_checknumber(L, 2)));
+}
+
+static int solua_servo_pulse(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_servo_pulse(luaL_checkstring(L, 1), "lua", solua_check_u32(L, 2)));
+}
+
+static int solua_servo_disable(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_servo_disable(luaL_checkstring(L, 1), "lua"));
+}
+
+static int solua_servo_close(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_servo_close(luaL_checkstring(L, 1), "lua"));
 }
 #endif
 
@@ -4081,6 +4560,393 @@ static int solua_buses_spi_write(lua_State *L)
 #endif
 #endif
 
+#if SOLAR_OS_PACKAGE_SERVICE_GNSS
+static int solua_gnss_list(lua_State *L)
+{
+    lua_newtable(L);
+    solar_os_gnss_info_t info;
+    for (size_t i = 0; solar_os_gnss_get(i, &info); i++) {
+        lua_newtable(L);
+        solua_set_str(L, -1, "name", info.name);
+        solua_set_str(L, -1, "driver", info.driver);
+        solua_set_bool(L, -1, "power_control", info.power_control);
+        solua_set_bool(L, -1, "powered", info.powered);
+        solua_set_bool(L, -1, "enable_control", info.enable_control);
+        solua_set_bool(L, -1, "enabled", info.enabled);
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static int solua_gnss_power(lua_State *L)
+{
+    solar_os_gnss_info_t info;
+    const bool enabled = lua_toboolean(L, 1);
+    const char *name = NULL;
+    if (!lua_isnoneornil(L, 2)) {
+        name = luaL_checkstring(L, 2);
+    } else if (solar_os_gnss_get(0U, &info)) {
+        name = info.name;
+    }
+    if (name == NULL) {
+        return solua_check_esp(L, ESP_ERR_NOT_FOUND);
+    }
+    (void)solua_check_esp(L, solar_os_gnss_set_power(name, enabled));
+    lua_pushboolean(L, enabled);
+    return 1;
+}
+
+static int solua_gnss_enabled(lua_State *L, bool enabled)
+{
+    solar_os_gnss_info_t info;
+    const char *name = NULL;
+    if (!lua_isnoneornil(L, 1)) {
+        name = luaL_checkstring(L, 1);
+    } else if (solar_os_gnss_get(0U, &info)) {
+        name = info.name;
+    }
+    if (name == NULL) {
+        return solua_check_esp(L, ESP_ERR_NOT_FOUND);
+    }
+    (void)solua_check_esp(L, solar_os_gnss_set_enabled(name, enabled));
+    lua_pushboolean(L, enabled);
+    return 1;
+}
+
+static int solua_gnss_enable(lua_State *L)
+{
+    return solua_gnss_enabled(L, true);
+}
+
+static int solua_gnss_disable(lua_State *L)
+{
+    return solua_gnss_enabled(L, false);
+}
+
+static int solua_gnss_fix(lua_State *L)
+{
+    solar_os_gnss_info_t info;
+    const char *name = NULL;
+    if (!lua_isnoneornil(L, 1)) {
+        name = luaL_checkstring(L, 1);
+    } else if (solar_os_gnss_get(0U, &info)) {
+        name = info.name;
+    }
+    if (name == NULL) {
+        return solua_check_esp(L, ESP_ERR_NOT_FOUND);
+    }
+    solar_os_gnss_fix_t fix;
+    (void)solua_check_esp(L, solar_os_gnss_read_fix(
+        name, solua_optional_u32(L, 2, 1000U), &fix));
+    lua_newtable(L);
+    solua_set_str(L, -1, "name", name);
+    solua_set_bool(L, -1, "valid", fix.valid);
+    solua_set_bool(L, -1, "time_valid", fix.time_valid);
+    solua_set_int(L, -1, "year", fix.year);
+    solua_set_int(L, -1, "month", fix.month);
+    solua_set_int(L, -1, "day", fix.day);
+    solua_set_int(L, -1, "hour", fix.hour);
+    solua_set_int(L, -1, "minute", fix.minute);
+    solua_set_int(L, -1, "second", fix.second);
+    solua_set_int(L, -1, "fix_type", fix.fix_type);
+    solua_set_bool(L, -1, "satellites_valid", fix.satellites_valid);
+    solua_set_int(L, -1, "satellites", fix.satellites);
+    solua_set_int(L, -1, "longitude_deg_e7", fix.longitude_deg_e7);
+    solua_set_int(L, -1, "latitude_deg_e7", fix.latitude_deg_e7);
+    solua_set_int(L, -1, "height_msl_mm", fix.height_msl_mm);
+    solua_set_int(L, -1, "horizontal_accuracy_mm", fix.horizontal_accuracy_mm);
+    solua_set_int(L, -1, "vertical_accuracy_mm", fix.vertical_accuracy_mm);
+    solua_set_int(L, -1, "ground_speed_mm_s", fix.ground_speed_mm_s);
+    solua_set_int(L, -1, "heading_deg_e5", fix.heading_deg_e5);
+    solua_set_int(L, -1, "position_dop_e2", fix.position_dop_e2);
+    return 1;
+}
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_HAPTIC
+static const char *solua_haptic_name(lua_State *L,
+                                     int index,
+                                     solar_os_haptic_info_t *info)
+{
+    if (!lua_isnoneornil(L, index)) {
+        return luaL_checkstring(L, index);
+    }
+    return solar_os_haptic_get(0U, info) ? info->name : NULL;
+}
+
+static int solua_haptic_list(lua_State *L)
+{
+    lua_newtable(L);
+    solar_os_haptic_info_t info;
+    for (size_t i = 0; solar_os_haptic_get(i, &info); i++) {
+        lua_newtable(L);
+        solua_set_str(L, -1, "name", info.name);
+        solua_set_str(L, -1, "driver", info.driver);
+        solua_set_int(L, -1, "effects", info.effect_count);
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static int solua_haptic_play(lua_State *L)
+{
+    solar_os_haptic_info_t info;
+    const lua_Integer effect = luaL_checkinteger(L, 1);
+    const char *name = solua_haptic_name(L, 2, &info);
+    if (name == NULL) {
+        return solua_check_esp(L, ESP_ERR_NOT_FOUND);
+    }
+    if (effect < 0 || effect > UINT16_MAX) {
+        return luaL_error(L, "invalid haptic effect");
+    }
+    return solua_check_esp(
+        L, solar_os_haptic_play_effect(name, (uint16_t)effect));
+}
+
+static int solua_haptic_stop(lua_State *L)
+{
+    solar_os_haptic_info_t info;
+    const char *name = solua_haptic_name(L, 1, &info);
+    return solua_check_esp(
+        L, name != NULL ? solar_os_haptic_stop(name) : ESP_ERR_NOT_FOUND);
+}
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_CHARGER
+static const char *solua_charger_name(lua_State *L,
+                                      int index,
+                                      solar_os_charger_info_t *info)
+{
+    if (!lua_isnoneornil(L, index)) {
+        return luaL_checkstring(L, index);
+    }
+    return solar_os_charger_get(0U, info) ? info->name : NULL;
+}
+
+static void solua_charger_range(lua_State *L,
+                                const solar_os_charger_range_t *range)
+{
+    lua_newtable(L);
+    solua_set_int(L, -1, "minimum", range->minimum);
+    solua_set_int(L, -1, "maximum", range->maximum);
+    solua_set_int(L, -1, "step", range->step);
+}
+
+static int solua_charger_list(lua_State *L)
+{
+    lua_newtable(L);
+    solar_os_charger_info_t info;
+    for (size_t i = 0; solar_os_charger_get(i, &info); i++) {
+        lua_newtable(L);
+        solua_set_str(L, -1, "name", info.name);
+        solua_set_str(L, -1, "driver", info.driver);
+        solua_charger_range(L, &info.input_current_limit_ma);
+        lua_setfield(L, -2, "input_current_limit_ma");
+        solua_charger_range(L, &info.charge_current_ma);
+        lua_setfield(L, -2, "charge_current_ma");
+        solua_charger_range(L, &info.charge_voltage_mv);
+        lua_setfield(L, -2, "charge_voltage_mv");
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static int solua_charger_status(lua_State *L)
+{
+    solar_os_charger_info_t info;
+    const char *name = solua_charger_name(L, 1, &info);
+    if (name == NULL) {
+        return solua_check_esp(L, ESP_ERR_NOT_FOUND);
+    }
+    solar_os_charger_status_t status;
+    (void)solua_check_esp(L, solar_os_charger_read_status(name, &status));
+    lua_newtable(L);
+    solua_set_str(L, -1, "name", name);
+    solua_set_bool(L, -1, "enabled", status.enabled);
+    solua_set_bool(L, -1, "input_present", status.input_present);
+    solua_set_bool(L, -1, "power_good", status.power_good);
+    solua_set_str(L, -1, "state", solar_os_charger_state_name(status.state));
+    solua_set_int(L, -1, "input_current_limit_ma", status.input_current_limit_ma);
+    solua_set_int(L, -1, "charge_current_ma", status.charge_current_ma);
+    solua_set_int(L, -1, "charge_voltage_mv", status.charge_voltage_mv);
+    solua_set_int(L, -1, "fault", status.fault);
+    return 1;
+}
+
+static int solua_charger_enable(lua_State *L)
+{
+    solar_os_charger_info_t info;
+    const char *name = solua_charger_name(L, 2, &info);
+    return solua_check_esp(L, name != NULL ? solar_os_charger_set_enabled(
+        name, lua_toboolean(L, 1)) : ESP_ERR_NOT_FOUND);
+}
+
+static int solua_charger_set_value(lua_State *L,
+                                   esp_err_t (*setter)(const char *, uint16_t))
+{
+    solar_os_charger_info_t info;
+    const lua_Integer value = luaL_checkinteger(L, 1);
+    const char *name = solua_charger_name(L, 2, &info);
+    if (value < 0 || value > UINT16_MAX) {
+        return luaL_error(L, "invalid charger value");
+    }
+    return solua_check_esp(L, name != NULL ?
+        setter(name, (uint16_t)value) : ESP_ERR_NOT_FOUND);
+}
+
+static int solua_charger_set_input_limit(lua_State *L)
+{
+    return solua_charger_set_value(
+        L, solar_os_charger_set_input_current_limit);
+}
+
+static int solua_charger_set_current(lua_State *L)
+{
+    return solua_charger_set_value(L, solar_os_charger_set_charge_current);
+}
+
+static int solua_charger_set_voltage(lua_State *L)
+{
+    return solua_charger_set_value(L, solar_os_charger_set_charge_voltage);
+}
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_IMU
+static void solua_imu_vector3(lua_State *L, const float vector[3])
+{
+    lua_newtable(L);
+    solua_set_num(L, -1, "x", vector[0]);
+    solua_set_num(L, -1, "y", vector[1]);
+    solua_set_num(L, -1, "z", vector[2]);
+}
+
+static void solua_imu_quaternion(lua_State *L, const float quaternion[4])
+{
+    lua_newtable(L);
+    solua_set_num(L, -1, "w", quaternion[0]);
+    solua_set_num(L, -1, "x", quaternion[1]);
+    solua_set_num(L, -1, "y", quaternion[2]);
+    solua_set_num(L, -1, "z", quaternion[3]);
+}
+
+static int solua_imu_list(lua_State *L)
+{
+    lua_newtable(L);
+    solar_os_imu_info_t info;
+    for (size_t i = 0; solar_os_imu_get(i, &info); i++) {
+        lua_newtable(L);
+        solua_set_str(L, -1, "name", info.name);
+        solua_set_str(L, -1, "driver", info.driver);
+        solua_set_bool(
+            L, -1, "acceleration",
+            (info.capabilities & SOLAR_OS_IMU_CAP_ACCELERATION) != 0U);
+        solua_set_bool(
+            L, -1, "angular_velocity",
+            (info.capabilities & SOLAR_OS_IMU_CAP_ANGULAR_VELOCITY) != 0U);
+        solua_set_bool(
+            L, -1, "orientation",
+            (info.capabilities & SOLAR_OS_IMU_CAP_ORIENTATION) != 0U);
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static int solua_imu_sample(lua_State *L)
+{
+    solar_os_imu_info_t info;
+    const char *name = NULL;
+    if (!lua_isnoneornil(L, 1)) {
+        name = luaL_checkstring(L, 1);
+    } else if (solar_os_imu_get(0U, &info)) {
+        name = info.name;
+    }
+    if (name == NULL) {
+        return solua_check_esp(L, ESP_ERR_NOT_FOUND);
+    }
+    solar_os_imu_sample_t sample;
+    (void)solua_check_esp(L, solar_os_imu_read_sample(
+        name, solua_optional_u32(L, 2, 1000U), &sample));
+
+    lua_newtable(L);
+    solua_set_str(L, -1, "name", name);
+    solua_set_int(L, -1, "timestamp_us", (lua_Integer)sample.timestamp_us);
+    if ((sample.valid & SOLAR_OS_IMU_CAP_ACCELERATION) != 0U) {
+        solua_imu_vector3(L, sample.acceleration_m_s2);
+        lua_setfield(L, -2, "acceleration_m_s2");
+    }
+    if ((sample.valid & SOLAR_OS_IMU_CAP_ANGULAR_VELOCITY) != 0U) {
+        solua_imu_vector3(L, sample.angular_velocity_rad_s);
+        lua_setfield(L, -2, "angular_velocity_rad_s");
+    }
+    if ((sample.valid & SOLAR_OS_IMU_CAP_ORIENTATION) != 0U) {
+        solua_imu_quaternion(L, sample.orientation);
+        lua_setfield(L, -2, "orientation");
+    }
+    return 1;
+}
+#endif
+
+#if SOLAR_OS_PACKAGE_SERVICE_NFC
+static int solua_nfc_list(lua_State *L)
+{
+    lua_newtable(L);
+    solar_os_nfc_info_t info;
+    for (size_t i = 0; solar_os_nfc_get(i, &info); i++) {
+        lua_newtable(L);
+        solua_set_str(L, -1, "name", info.name);
+        solua_set_str(L, -1, "driver", info.driver);
+        solua_set_bool(L, -1, "power_control", info.power_control);
+        solua_set_bool(L, -1, "powered", info.powered);
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    return 1;
+}
+
+static int solua_nfc_power(lua_State *L)
+{
+    solar_os_nfc_info_t info;
+    const bool enabled = lua_toboolean(L, 1);
+    const char *name = NULL;
+    if (!lua_isnoneornil(L, 2)) {
+        name = luaL_checkstring(L, 2);
+    } else if (solar_os_nfc_get(0U, &info)) {
+        name = info.name;
+    }
+    if (name == NULL) {
+        return solua_check_esp(L, ESP_ERR_NOT_FOUND);
+    }
+    (void)solua_check_esp(L, solar_os_nfc_set_power(name, enabled));
+    lua_pushboolean(L, enabled);
+    return 1;
+}
+
+static int solua_nfc_scan(lua_State *L)
+{
+    solar_os_nfc_info_t info;
+    const char *name = NULL;
+    if (!lua_isnoneornil(L, 1)) {
+        name = luaL_checkstring(L, 1);
+    } else if (solar_os_nfc_get(0U, &info)) {
+        name = info.name;
+    }
+    if (name == NULL) {
+        return solua_check_esp(L, ESP_ERR_NOT_FOUND);
+    }
+    solar_os_nfc_tag_t tag;
+    (void)solua_check_esp(L, solar_os_nfc_scan(
+        name, solua_optional_u32(L, 2, 1000U), &tag));
+    lua_newtable(L);
+    solua_set_str(L, -1, "name", name);
+    solua_set_str(L, -1, "technology", "nfca");
+    lua_pushlstring(L, (const char *)tag.uid, tag.uid_len);
+    lua_setfield(L, -2, "uid");
+    lua_pushlstring(L, (const char *)tag.atqa, sizeof(tag.atqa));
+    lua_setfield(L, -2, "atqa");
+    solua_set_int(L, -1, "sak", tag.sak);
+    return 1;
+}
+#endif
+
 #if SOLAR_OS_PACKAGE_SERVICE_EXPANSION
 static void solua_push_expansion_binding(lua_State *L,
                                          const solar_os_expansion_binding_t *binding)
@@ -4159,9 +5025,12 @@ static int solua_expansion_devices(lua_State *L)
 static bool solua_expansion_key_known(const char *key)
 {
     static const char *const keys[] = {
-        "spi", "cs", "ce", "i2c", "addr", "uart", "ps2", "gpio", "irq", "reset",
+        "stream", "timeout-ms", "ready", "clock", "reset-ms", "boot-ms", "reset-active", "max_mv",
+        "mode", "invert", "pull", "filter_ns",
+        "spi", "cs", "ce", "i2c", "addr", "alt_addr", "uart", "ps2", "gpio", "irq", "int", "reset",
         "rst", "data", "bck", "din", "rck", "mclk", "ws", "dout", "dc",
         "busy", "adc", "pwm", "backlight", "a", "b",
+        "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "siod", "sioc", "vsync", "href", "pclk", "xclk", "pwdn",
         "count", "keys", "x", "y", "min", "center", "max", "deadzone",
     };
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -4207,7 +5076,9 @@ static bool solua_table_optional_int(lua_State *L,
         lua_pop(L, 1);
         return false;
     }
-    *value = (int)luaL_checkinteger(L, -1);
+    const lua_Integer integer = luaL_checkinteger(L, -1);
+    if (integer < INT_MIN || integer > INT_MAX) luaL_error(L, "%s is outside the integer range", key);
+    *value = (int)integer;
     lua_pop(L, 1);
     return true;
 }
@@ -4247,6 +5118,9 @@ static int solua_expansion_attach(lua_State *L)
     const char *i2c = solua_table_optional_string(L, 3, "i2c");
     const char *uart = solua_table_optional_string(L, 3, "uart");
     const char *ps2 = solua_table_optional_string(L, 3, "ps2");
+    const char *stream = solua_table_optional_string(L, 3, "stream");
+    if (stream != NULL) solua_expansion_add_binding(L, bindings, &binding_count,
+        SOLAR_OS_EXPANSION_BINDING_BYTE_STREAM, "stream", stream, -1, -1);
     const char *x = solua_table_optional_string(L, 3, "x");
     const char *y = solua_table_optional_string(L, 3, "y");
     int value = 0;
@@ -4300,6 +5174,19 @@ static int solua_expansion_attach(lua_State *L)
                                     &binding_count,
                                     SOLAR_OS_EXPANSION_BINDING_I2C_ADDRESS,
                                     "",
+                                    i2c,
+                                    value,
+                                    -1);
+    }
+    if (solua_table_optional_int(L, 3, "alt_addr", &value)) {
+        if (i2c == NULL) {
+            return luaL_error(L, "alt_addr requires i2c");
+        }
+        solua_expansion_add_binding(L,
+                                    bindings,
+                                    &binding_count,
+                                    SOLAR_OS_EXPANSION_BINDING_I2C_ADDRESS,
+                                    "alt_addr",
                                     i2c,
                                     value,
                                     -1);
@@ -4382,6 +5269,8 @@ static int solua_expansion_attach(lua_State *L)
     } pin_bindings[] = {
         {"gpio", "gpio", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"irq", "irq", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"int", "int", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"ready", "ready", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"reset", "reset", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"rst", "reset", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"data", "data", SOLAR_OS_EXPANSION_BINDING_GPIO},
@@ -4398,6 +5287,21 @@ static int solua_expansion_attach(lua_State *L)
         {"backlight", "backlight", SOLAR_OS_EXPANSION_BINDING_PWM},
         {"a", "a", SOLAR_OS_EXPANSION_BINDING_GPIO},
         {"b", "b", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"d0", "d0", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"d1", "d1", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"d2", "d2", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"d3", "d3", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"d4", "d4", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"d5", "d5", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"d6", "d6", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"d7", "d7", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"siod", "siod", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"sioc", "sioc", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"vsync", "vsync", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"href", "href", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"pclk", "pclk", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"xclk", "xclk", SOLAR_OS_EXPANSION_BINDING_GPIO},
+        {"pwdn", "pwdn", SOLAR_OS_EXPANSION_BINDING_GPIO},
     };
     int reset = 0;
     int rst = 0;
@@ -4417,7 +5321,8 @@ static int solua_expansion_attach(lua_State *L)
                                     -1);
     }
     static const char *const parameter_bindings[] = {
-        "min", "center", "max", "deadzone",
+        "min", "center", "max", "deadzone", "timeout-ms", "clock", "reset-ms", "boot-ms", "reset-active", "max_mv",
+        "mode", "invert", "pull", "filter_ns",
     };
     for (size_t i = 0;
          i < sizeof(parameter_bindings) / sizeof(parameter_bindings[0]);
@@ -4982,6 +5887,100 @@ static int solua_audio_play_wav(lua_State *L)
 }
 #endif
 
+#if SOLAR_OS_PACKAGE_SERVICE_SPEECH
+static uint16_t solua_speech_parameter(lua_State *L,
+                                       int index,
+                                       uint16_t fallback,
+                                       uint16_t minimum,
+                                       uint16_t maximum,
+                                       const char *name)
+{
+    const uint32_t value = solua_optional_u32(L, index, fallback);
+    if (value < minimum || value > maximum) {
+        luaL_error(L,
+                   "%s must be %u..%u",
+                   name,
+                   (unsigned)minimum,
+                   (unsigned)maximum);
+    }
+    return (uint16_t)value;
+}
+
+static int solua_speech_say(lua_State *L)
+{
+    size_t text_len = 0U;
+    const char *text = luaL_checklstring(L, 1, &text_len);
+    const solar_os_speech_request_t request = {
+        .text = text,
+        .text_len = text_len,
+        .volume = lua_isnoneornil(L, 2) ?
+            SOLAR_OS_AUDIO_VOLUME_GLOBAL : solua_check_u8(L, 2),
+        .drop_if_busy = !lua_isnoneornil(L, 3) && lua_toboolean(L, 3),
+        .pitch = solua_speech_parameter(L,
+                                        4,
+                                        SOLAR_OS_SPEECH_PITCH_DEFAULT,
+                                        SOLAR_OS_SPEECH_PITCH_MIN,
+                                        SOLAR_OS_SPEECH_PITCH_MAX,
+                                        "pitch"),
+        .speed = solua_speech_parameter(L,
+                                        5,
+                                        SOLAR_OS_SPEECH_SPEED_DEFAULT,
+                                        SOLAR_OS_SPEECH_SPEED_MIN,
+                                        SOLAR_OS_SPEECH_SPEED_MAX,
+                                        "speed"),
+    };
+    uint32_t request_id = 0U;
+    (void)solua_check_esp(L, solar_os_speech_enqueue(&request, &request_id));
+    lua_pushinteger(L, request_id);
+    return 1;
+}
+
+static int solua_speech_cancel(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_speech_cancel(solua_check_u32(L, 1)));
+}
+
+static int solua_speech_request_status(lua_State *L)
+{
+    solar_os_speech_request_status_t status;
+    if (!solar_os_speech_request_status(solua_check_u32(L, 1), &status)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    solua_set_int(L, -1, "id", status.id);
+    solua_set_str(
+        L, -1, "state", solar_os_speech_request_state_name(status.state));
+    solua_set_int(L, -1, "error", status.error);
+    solua_set_str(L, -1, "error_name", esp_err_to_name(status.error));
+    solua_set_int(L, -1, "progress_done", status.progress_done);
+    solua_set_int(L, -1, "progress_total", status.progress_total);
+    return 1;
+}
+
+static int solua_speech_queue_status(lua_State *L)
+{
+    solar_os_speech_queue_status_t status;
+    solar_os_speech_queue_get_status(&status);
+    lua_newtable(L);
+    solua_set_bool(L, -1, "running", status.running);
+    solua_set_int(L, -1, "queued", status.queued);
+    solua_set_int(L, -1, "current_id", status.current_id);
+    solua_set_str(
+        L,
+        -1,
+        "current_state",
+        status.current_id != 0U ?
+            solar_os_speech_request_state_name(status.current_state) : "idle");
+    solua_set_int(L, -1, "completed", status.completed);
+    solua_set_int(L, -1, "cancelled", status.cancelled);
+    solua_set_int(L, -1, "dropped", status.dropped);
+    solua_set_int(L, -1, "failed", status.failed);
+    solua_set_int(L, -1, "capacity", SOLAR_OS_SPEECH_QUEUE_CAPACITY);
+    return 1;
+}
+#endif
+
 #if SOLAR_OS_PACKAGE_SERVICE_SYNTH
 #define SOLUA_SYNTH_OWNER "lua"
 
@@ -5433,6 +6432,16 @@ static int solua_identity_format(lua_State *L)
 }
 
 #if SOLAR_OS_PACKAGE_SERVICE_NET
+static int solua_net_router_start(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_network_router_start());
+}
+
+static int solua_net_router_stop(lua_State *L)
+{
+    return solua_check_esp(L, solar_os_network_router_stop());
+}
+
 static int solua_net_ping(lua_State *L)
 {
     const char *host = luaL_checkstring(L, 1);
@@ -5934,22 +6943,35 @@ static int solua_sessions_close(lua_State *L)
     return solua_check_esp(L, solar_os_sessions_close_any(solua_check_u8(L, 1), NULL));
 }
 
-static int solua_apps_list(lua_State *L)
+static void solua_push_app_discovery(lua_State *L,
+                                     const solar_os_app_discovery_info_t *info)
 {
     lua_newtable(L);
+    solua_set_str(L, -1, "name", info->name);
+    solua_set_str(L, -1, "id", info->id);
+    solua_set_str(L, -1, "title", info->title);
+    solua_set_str(L, -1, "summary", info->summary);
+    solua_set_str(L,
+                  -1,
+                  "kind",
+                  info->kind == SOLAR_OS_APP_DISCOVERY_PLAYGROUND ?
+                      "playground" : "native");
+    solua_set_str(L, -1, "runtime", info->runtime[0] != '\0' ? info->runtime : NULL);
+}
+
+static int solua_apps_list(lua_State *L)
+{
+    const bool include_playground = lua_isnoneornil(L, 1) || lua_toboolean(L, 1);
+    lua_newtable(L);
     const int list = lua_gettop(L);
-    const size_t count = solar_os_app_registry_count();
+    const size_t count = solar_os_app_discovery_count(include_playground);
     int out = 1;
     for (size_t i = 0; i < count; i++) {
-        const solar_os_app_registry_entry_t *entry = solar_os_app_registry_get(i);
-        if (entry == NULL) {
-            continue;
+        solar_os_app_discovery_info_t info;
+        if (solar_os_app_discovery_get(i, include_playground, &info)) {
+            solua_push_app_discovery(L, &info);
+            lua_rawseti(L, list, out++);
         }
-
-        lua_newtable(L);
-        solua_set_str(L, -1, "name", entry->name);
-        solua_set_str(L, -1, "summary", entry->summary);
-        lua_rawseti(L, list, out++);
     }
     return 1;
 }
@@ -5967,6 +6989,65 @@ static int solua_apps_find(lua_State *L)
     solua_set_str(L, -1, "name", entry->name);
     solua_set_str(L, -1, "summary", entry->summary);
     return 1;
+}
+
+static int solua_apps_handoff(lua_State *L)
+{
+    solua.exit_code = 0;
+    solua.repl_exit_requested = true;
+    return luaL_error(L, SOLUA_EXIT_MARKER);
+}
+
+static int solua_apps_launch(lua_State *L)
+{
+    if (solua.ctx == NULL) {
+        return solua_check_esp(L, ESP_ERR_INVALID_STATE);
+    }
+
+    const char *name = luaL_checkstring(L, 1);
+    size_t arg_count = 0U;
+    const char *launch_args[SOLAR_OS_APP_ARG_MAX - 1U] = {0};
+    if (!lua_isnoneornil(L, 2)) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        arg_count = lua_rawlen(L, 2);
+        if (arg_count >= SOLAR_OS_APP_ARG_MAX) {
+            return luaL_error(L, "too many app arguments");
+        }
+        for (size_t i = 0U; i < arg_count; i++) {
+            lua_rawgeti(L, 2, (lua_Integer)i + 1);
+            launch_args[i] = luaL_checkstring(L, -1);
+            lua_pop(L, 1);
+        }
+    }
+
+    const esp_err_t err = solar_os_app_registry_request_launch(solua.ctx,
+                                                                name,
+                                                                arg_count,
+                                                                launch_args);
+    if (err != ESP_OK) {
+        return solua_check_esp(L, err);
+    }
+    return solua_apps_handoff(L);
+}
+
+static int solua_apps_can_open(lua_State *L)
+{
+    lua_pushboolean(L,
+                    solar_os_app_registry_can_open(luaL_checkstring(L, 1)));
+    return 1;
+}
+
+static int solua_apps_open(lua_State *L)
+{
+    if (solua.ctx == NULL) {
+        return solua_check_esp(L, ESP_ERR_INVALID_STATE);
+    }
+    const esp_err_t err = solar_os_app_registry_request_open(
+        solua.ctx, luaL_checkstring(L, 1));
+    if (err != ESP_OK) {
+        return solua_check_esp(L, err);
+    }
+    return solua_apps_handoff(L);
 }
 
 static bool solua_input_source_info(solar_os_input_source_t source,
@@ -6024,7 +7105,7 @@ static void solua_push_input_event(lua_State *L,
         solua_set_int(L, -1, "delta_y", pointer->delta_y);
         solua_set_int(L, -1, "buttons", pointer->buttons);
         solua_set_str(L, -1, "target", pointer->target);
-    } else {
+    } else if (event->type == SOLAR_OS_EVENT_AXIS) {
         const solar_os_input_axis_event_t *axis = &event->data.axis;
         solua_set_str(L, -1, "type", "axis");
         solua_input_set_source(L, axis->source);
@@ -6033,7 +7114,55 @@ static void solua_push_input_event(lua_State *L,
                       solar_os_input_axis_name(axis->axis));
         solua_set_int(L, -1, "value", axis->value);
         solua_set_int(L, -1, "delta", axis->delta);
+    } else {
+        const solar_os_input_gesture_event_t *gesture = &event->data.gesture;
+        solua_set_str(L, -1, "type", "gesture");
+        solua_input_set_source(L, gesture->source);
+        solua_set_int(L, -1, "gesture", gesture->gesture);
+        solua_set_str(L, -1, "gesture_name",
+                      solar_os_input_gesture_name(gesture->gesture));
+        solua_set_int(L, -1, "direction", gesture->direction);
+        solua_set_str(L, -1, "direction_name",
+                      solar_os_input_gesture_direction_name(gesture->direction));
+        solua_set_int(L, -1, "flags", gesture->flags);
+        solua_set_int(L, -1, "value", gesture->value);
+        solua_set_int(L, -1, "raw", gesture->raw);
     }
+}
+
+static int solua_input_capture_keyboard(lua_State *L)
+{
+    if (solua.device_input == NULL) {
+        return luaL_error(L, "keyboard capture requires a foreground app");
+    }
+    return solua_check_esp(L, solar_os_input_capture_keyboard(luaL_checkstring(L, 1), &solua));
+}
+
+static int solua_input_release_keyboard(lua_State *L)
+{
+    solar_os_input_release_keyboard(&solua);
+    return 0;
+}
+
+static int solua_input_read_key(lua_State *L)
+{
+    solar_os_input_key_event_t event;
+    bool reset;
+    if (!solar_os_input_read_captured_key(&solua, &event, &reset)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    solua_set_str(L, -1, "type", reset ? "reset" : "key");
+    if (!reset) {
+        solua_input_set_source(L, event.source);
+        solua_set_int(L, -1, "physical_key", event.physical_key);
+        solua_set_int(L, -1, "usage", event.usage);
+        solua_set_int(L, -1, "key", event.key);
+        solua_set_int(L, -1, "modifiers", event.modifiers);
+        solua_set_int(L, -1, "action", event.action);
+    }
+    return 1;
 }
 
 static int solua_input_sources(lua_State *L)
@@ -6127,6 +7256,43 @@ static int solua_input_status(lua_State *L)
     return 1;
 }
 
+#if SOLAR_OS_PACKAGE_SERVICE_INPUT_KEYMAP
+static int solua_input_keymap_info(lua_State *L)
+{
+    solar_os_input_keymap_info_t info;
+    (void)solua_check_esp(L, solar_os_input_keymap_info(luaL_checkstring(L, 1), &info));
+    lua_newtable(L);
+    solua_set_int(L, -1, "source", info.source);
+    solua_set_int(L, -1, "capabilities", info.capabilities);
+    solua_set_int(L, -1, "key_count", info.key_count);
+    solua_set_int(L, -1, "rows", info.rows);
+    solua_set_int(L, -1, "cols", info.cols);
+    solua_set_int(L, -1, "first", info.first);
+    solua_set_int(L, -1, "stride", info.stride);
+    solua_set_bool(L, -1, "supported", info.capabilities != 0U);
+    solua_set_bool(L, -1, "physical", (info.capabilities & SOLAR_OS_INPUT_KEYMAP_PHYSICAL) != 0U);
+    solua_set_bool(L, -1, "modifiers", (info.capabilities & SOLAR_OS_INPUT_KEYMAP_MODIFIERS) != 0U);
+    solua_set_bool(L, -1, "layers", (info.capabilities & SOLAR_OS_INPUT_KEYMAP_LAYERS) != 0U);
+    solua_set_bool(L, -1, "tap_hold", (info.capabilities & SOLAR_OS_INPUT_KEYMAP_TAP_HOLD) != 0U);
+    return 1;
+}
+
+static int solua_input_load_keymap(lua_State *L)
+{
+    char path[SOLAR_OS_STORAGE_PATH_MAX];
+    const char *name = luaL_checkstring(L, 1);
+    solua_resolve_path(L, 2, path, sizeof(path));
+    (void)solua_check_esp(L, solar_os_input_keymap_load(name, path));
+    return 0;
+}
+
+static int solua_input_reset_keymap(lua_State *L)
+{
+    (void)solua_check_esp(L, solar_os_input_keymap_reset(luaL_checkstring(L, 1)));
+    return 0;
+}
+#endif
+
 static solar_os_shell_io_t *solua_current_io(void)
 {
     return solua.session_io;
@@ -6173,6 +7339,7 @@ static void solua_gfx_release_target_name(const char *target)
 
 static void solua_ui_send_event(lua_State *L, const solua_event_t *event)
 {
+    if (solua_emotion_drawing()) luaL_error(L, "close emotion faces before drawing graphics or TUI");
     if (!solua_send_event(event)) {
         luaL_error(L, "ui event queue stopped");
     }
@@ -6551,6 +7718,7 @@ static void solua_gfx_send_simple(lua_State *L, solua_event_type_t type)
 
 static int solua_gfx_begin(lua_State *L)
 {
+    if (solua_emotion_drawing()) return luaL_error(L, "close emotion faces before drawing graphics");
     const char *target = NULL;
     if (!lua_isnoneornil(L, 1)) {
         target = luaL_checkstring(L, 1);
@@ -6823,6 +7991,119 @@ static int solua_gfx_bitmap(lua_State *L)
     return 0;
 }
 
+#if SOLAR_OS_PACKAGE_SERVICE_IMAGE
+static size_t solua_image_slot(lua_State *L, int index)
+{
+    const lua_Integer handle = luaL_checkinteger(L, index);
+    if (handle < 1 || handle > SOLUA_RASTER_IMAGE_MAX ||
+        solua.images[handle - 1] == NULL) {
+        luaL_error(L, "invalid image handle");
+    }
+    return (size_t)(handle - 1);
+}
+
+static void solua_image_close_all_handles(void)
+{
+    for (size_t slot = 0; slot < SOLUA_RASTER_IMAGE_MAX; slot++) {
+        if (solua.images[slot] != NULL) {
+            solar_os_raster_image_release(solua.images[slot]);
+            solua.images[slot] = NULL;
+        }
+    }
+}
+
+static void solua_image_release_pending_events(QueueHandle_t events)
+{
+    if (events == NULL) {
+        return;
+    }
+    solua_event_t event;
+    while (xQueueReceive(events, &event, 0) == pdPASS) {
+        if (event.type == SOLUA_EVENT_IMAGE_DRAW && event.object != 0U) {
+            solar_os_raster_image_release(
+                (solar_os_raster_image_t *)event.object);
+        }
+    }
+}
+
+static int solua_image_open(lua_State *L)
+{
+    size_t free_slot = SOLUA_RASTER_IMAGE_MAX;
+    for (size_t slot = 0; slot < SOLUA_RASTER_IMAGE_MAX; slot++) {
+        if (solua.images[slot] == NULL) {
+            free_slot = slot;
+            break;
+        }
+    }
+    if (free_slot == SOLUA_RASTER_IMAGE_MAX) {
+        return luaL_error(L, "too many open images");
+    }
+
+    char path[SOLAR_OS_STORAGE_PATH_MAX];
+    solua_resolve_path(L, 1, path, sizeof(path));
+    solar_os_raster_image_t *image = NULL;
+    (void)solua_check_esp(L, solar_os_raster_image_open(path, &image));
+    solua.images[free_slot] = image;
+    lua_pushinteger(L, (lua_Integer)free_slot + 1);
+    return 1;
+}
+
+static int solua_image_size(lua_State *L)
+{
+    const solar_os_raster_image_t *image =
+        solua.images[solua_image_slot(L, 1)];
+    lua_pushinteger(L, solar_os_raster_image_width(image));
+    lua_pushinteger(L, solar_os_raster_image_height(image));
+    return 2;
+}
+
+#include "solar_os_lua_image_rgb.inc"
+
+static int solua_image_draw(lua_State *L)
+{
+    const int count = lua_gettop(L);
+    if (count != 3 && count != 5) {
+        return luaL_error(L, "expected handle, x, y [, width, height]");
+    }
+    solar_os_raster_image_t *image = solua.images[solua_image_slot(L, 1)];
+    const uint16_t width = count == 5 ? solua_check_u16_size(L, 4) : 0U;
+    const uint16_t height = count == 5 ? solua_check_u16_size(L, 5) : 0U;
+    if (count == 5 && (width == 0U || height == 0U)) {
+        return luaL_error(L, "image dimensions must be positive");
+    }
+
+    solar_os_raster_image_retain(image);
+    const solua_event_t event = {
+        .type = SOLUA_EVENT_IMAGE_DRAW,
+        .x0 = (int32_t)luaL_checkinteger(L, 2),
+        .y0 = (int32_t)luaL_checkinteger(L, 3),
+        .width = width,
+        .height = height,
+        .object = (uintptr_t)image,
+    };
+    if (!solua_send_event(&event)) {
+        solar_os_raster_image_release(image);
+        return luaL_error(L, "ui event queue stopped");
+    }
+    return 0;
+}
+
+static int solua_image_close(lua_State *L)
+{
+    const size_t slot = solua_image_slot(L, 1);
+    solar_os_raster_image_release(solua.images[slot]);
+    solua.images[slot] = NULL;
+    return 0;
+}
+
+static int solua_image_close_all(lua_State *L)
+{
+    (void)L;
+    solua_image_close_all_handles();
+    return 0;
+}
+#endif
+
 static int solua_gfx_text(lua_State *L)
 {
     size_t len = 0;
@@ -6843,6 +8124,14 @@ static int solua_gfx_text(lua_State *L)
     return 0;
 }
 
+#include "solar_os_lua_media.inc"
+#include "solar_os_lua_imlib.inc"
+#include "solar_os_lua_inference.inc"
+#include "solar_os_lua_pipeline.inc"
+#include "solar_os_lua_dlp.inc"
+#include "solar_os_lua_emotion.inc"
+
+#if SOLAR_OS_PACKAGE_SERVICE_MESSAGING
 static void solua_push_contact(lua_State *L,
                                const solar_os_contact_t *contact)
 {
@@ -6931,6 +8220,19 @@ static void solua_push_conversation(
     lua_setfield(L, -2, "kind");
     lua_pushstring(L, conversation->title);
     lua_setfield(L, -2, "title");
+    char label[SOLAR_OS_MESSAGING_TITLE_MAX];
+    solar_os_messaging_conversation_label(conversation, label, sizeof(label));
+    lua_pushstring(L, label);
+    lua_setfield(L, -2, "label");
+    lua_pushboolean(L, conversation->history_only);
+    lua_setfield(L, -2, "history_only");
+    solua_set_int(L, -1, "instance_id", conversation->provider);
+    solar_os_messaging_provider_status_t provider;
+    if (solar_os_messaging_provider_get_status(conversation->provider, &provider) == ESP_OK) {
+        lua_pushstring(L, provider.class_name); lua_setfield(L, -2, "provider_class");
+    }
+    solua_set_int(L, -1, "join_state", conversation->join_state);
+    lua_pushstring(L, conversation->join_error); lua_setfield(L, -2, "join_error");
     lua_pushinteger(L, conversation->contact_id);
     lua_setfield(L, -2, "contact_id");
     lua_pushinteger(L, conversation->endpoint_id);
@@ -6944,6 +8246,81 @@ static void solua_push_conversation(
     lua_pushinteger(L, conversation->security_flags);
     lua_setfield(L, -2, "security_flags");
 }
+
+static int solua_messages_instances(lua_State *L)
+{
+    lua_newtable(L); unsigned index = 0;
+    solar_os_messaging_provider_id_t cursor = 0;
+    solar_os_messaging_provider_status_t status;
+    while (solar_os_messaging_provider_next(&cursor, &status)) {
+        lua_newtable(L);
+        solua_set_int(L, -1, "id", cursor);
+        solua_set_int(L, -1, "capabilities", status.capabilities);
+        lua_pushstring(L, status.name); lua_setfield(L, -2, "name");
+        lua_pushstring(L, status.class_name); lua_setfield(L, -2, "class");
+        lua_pushboolean(L, status.running); lua_setfield(L, -2, "running");
+        lua_pushboolean(L, status.connected); lua_setfield(L, -2, "connected");
+        lua_pushstring(L, status.detail); lua_setfield(L, -2, "detail");
+        lua_rawseti(L, -2, ++index);
+    }
+    return 1;
+}
+static int solua_messages_classes(lua_State *L)
+{
+    lua_newtable(L); unsigned index = 0;
+    char cursor[16] = ""; solar_os_messaging_class_status_t status;
+    while (solar_os_messaging_class_next(cursor, &status)) {
+        lua_newtable(L);
+        lua_pushstring(L, status.name); lua_setfield(L, -2, "name");
+        solua_set_int(L, -1, "capabilities", status.capabilities);
+        lua_pushboolean(L, status.creatable); lua_setfield(L, -2, "creatable");
+        lua_rawseti(L, -2, ++index); strlcpy(cursor, status.name, sizeof(cursor));
+    }
+    return 1;
+}
+static size_t solua_messages_settings(lua_State *L, int index, const char **arguments)
+{
+    luaL_checktype(L, index, LUA_TTABLE); size_t count = lua_rawlen(L, index);
+    if (count > 8) luaL_error(L, "at most eight provider settings");
+    /* Keep converted values on the stack until the provider copies them. */
+    for (size_t i = 0; i < count; i++) { lua_rawgeti(L, index, i + 1); arguments[i] = luaL_checkstring(L, -1); }
+    return count;
+}
+static int solua_messages_add(lua_State *L)
+{
+    const char *class_name = luaL_checkstring(L, 1), *name = luaL_checkstring(L, 2), *arguments[8];
+    size_t count = solua_messages_settings(L, 3, arguments);
+    solar_os_messaging_provider_id_t id;
+    esp_err_t error = solar_os_messaging_instance_add(class_name, name, count, arguments, &id);
+    if (error != ESP_OK) return solua_check_esp(L, error);
+    lua_pushinteger(L, id); return 1;
+}
+static int solua_messages_configure(lua_State *L)
+{
+    solar_os_messaging_provider_id_t id = (uint32_t)luaL_checkinteger(L, 1);
+    const char *arguments[8]; size_t count = solua_messages_settings(L, 2, arguments);
+    return solua_check_esp(L, solar_os_messaging_instance_configure(id, count, arguments));
+}
+static int solua_messages_join(lua_State *L)
+{
+    solar_os_conversation_id_t conversation;
+    esp_err_t error = solar_os_messaging_join((uint32_t)luaL_checkinteger(L, 1), luaL_checkstring(L, 2), &conversation);
+    if (error != ESP_OK) return solua_check_esp(L, error);
+    lua_pushinteger(L, conversation); return 1;
+}
+static int solua_messages_query(lua_State *L)
+{
+    solar_os_conversation_id_t conversation;
+    esp_err_t error = solar_os_messaging_open_direct((uint32_t)luaL_checkinteger(L, 1), luaL_checkstring(L, 2), &conversation);
+    if (error != ESP_OK) return solua_check_esp(L, error);
+    lua_pushinteger(L, conversation); return 1;
+}
+static int solua_messages_leave(lua_State *L)
+{ return solua_check_esp(L, solar_os_messaging_leave((uint32_t)luaL_checkinteger(L, 1))); }
+static int solua_messages_connect(lua_State *L)
+{ return solua_check_esp(L, solar_os_messaging_connect((uint32_t)luaL_checkinteger(L, 1), lua_toboolean(L, 2))); }
+static int solua_messages_remove_instance(lua_State *L)
+{ return solua_check_esp(L, solar_os_messaging_instance_remove((uint32_t)luaL_checkinteger(L, 1))); }
 
 static int solua_messages_conversations(lua_State *L)
 {
@@ -7066,6 +8443,7 @@ static int solua_messages_cancel(lua_State *L)
     }
     return solua_check_esp(L, solar_os_messaging_cancel((uint64_t)key));
 }
+#endif
 
 static void solua_new_submodule(lua_State *L, int parent, const char *name)
 {
@@ -7080,6 +8458,9 @@ static void solua_new_submodule(lua_State *L, int parent, const char *name)
 #endif
 #if SOLAR_OS_PACKAGE_SERVICE_FTP
 #include "solar_os_lua_ftp.inc"
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_SFTPSYNC
+#include "solar_os_lua_sftpsync.inc"
 #endif
 
 static int solua_require(lua_State *L)
@@ -7148,6 +8529,35 @@ static void solua_open_solaros(lua_State *L)
         script_submodule, \
         SOLAR_OS_SCRIPT_API_STRINGIFY(public_name), \
         solua_##module_name##_##submodule_name##_##native_name)
+#define SOLAR_OS_SCRIPT_API_SUBMODULE_INT( \
+    module_name, submodule_name, public_name, value) \
+    solua_set_int(L, \
+                  script_submodule, \
+                  SOLAR_OS_SCRIPT_API_STRINGIFY(public_name), \
+                  value)
+#define SOLAR_OS_SCRIPT_API_SUBMODULE_UINT( \
+    module_name, submodule_name, public_name, value) \
+    solua_set_int(L, \
+                  script_submodule, \
+                  SOLAR_OS_SCRIPT_API_STRINGIFY(public_name), \
+                  value)
+#define SOLAR_OS_SCRIPT_API_SUBSUBMODULE_BEGIN( \
+    module_name, submodule_name, child_name) \
+    { \
+        solua_new_submodule( \
+            L, script_submodule, SOLAR_OS_SCRIPT_API_STRINGIFY(child_name)); \
+        const int script_subsubmodule = lua_gettop(L)
+#define SOLAR_OS_SCRIPT_API_SUBSUBMODULE_FUNCTION( \
+    module_name, submodule_name, child_name, public_name, native_name) \
+    solua_set_func( \
+        L, \
+        script_subsubmodule, \
+        SOLAR_OS_SCRIPT_API_STRINGIFY(public_name), \
+        solua_##module_name##_##submodule_name##_##child_name##_##native_name)
+#define SOLAR_OS_SCRIPT_API_SUBSUBMODULE_END( \
+    module_name, submodule_name, child_name) \
+        lua_pop(L, 1); \
+    }
 #define SOLAR_OS_SCRIPT_API_SUBMODULE_END(module_name, submodule_name) \
         lua_pop(L, 1); \
     }
@@ -7156,7 +8566,12 @@ static void solua_open_solaros(lua_State *L)
     }
 #include "solar_os_script_api.inc"
 #undef SOLAR_OS_SCRIPT_API_MODULE_END
+#undef SOLAR_OS_SCRIPT_API_SUBSUBMODULE_END
+#undef SOLAR_OS_SCRIPT_API_SUBSUBMODULE_FUNCTION
+#undef SOLAR_OS_SCRIPT_API_SUBSUBMODULE_BEGIN
 #undef SOLAR_OS_SCRIPT_API_SUBMODULE_END
+#undef SOLAR_OS_SCRIPT_API_SUBMODULE_UINT
+#undef SOLAR_OS_SCRIPT_API_SUBMODULE_INT
 #undef SOLAR_OS_SCRIPT_API_SUBMODULE_FUNCTION
 #undef SOLAR_OS_SCRIPT_API_SUBMODULE_BEGIN
 #undef SOLAR_OS_SCRIPT_API_FUNCTION_NAMED
@@ -7278,6 +8693,7 @@ esp_err_t solar_os_lua_run(const solar_os_script_run_request_t *request,
                            solar_os_script_run_result_t *result)
 {
     solar_os_script_run_control_t control;
+    solua_cold_state_t *runner_state = NULL;
     esp_err_t err = solar_os_script_run_begin(request, result, &control);
     if (err != ESP_OK) {
         return err;
@@ -7289,6 +8705,18 @@ esp_err_t solar_os_lua_run(const solar_os_script_run_request_t *request,
         return result->status;
     }
 
+    runner_state = solar_os_memory_calloc(
+        1,
+        sizeof(*runner_state),
+        SOLAR_OS_MEMORY_EXTERNAL_PREFERRED,
+        "lua.runner-state");
+    if (runner_state == NULL) {
+        solar_os_script_run_error(&control,
+                                  ESP_ERR_NO_MEM,
+                                  "Lua state allocation failed");
+        goto cleanup;
+    }
+    solua_runtime_state = runner_state;
     memset(&solua, 0, sizeof(solua));
     solua.ctx = request->context;
     solua.argc = request->argc;
@@ -7392,9 +8820,17 @@ esp_err_t solar_os_lua_run(const solar_os_script_run_request_t *request,
 #if SOLAR_OS_PACKAGE_SERVICE_NET
     solua_net_destroy();
 #endif
+    solua_inference_destroy();
+    solua_media_destroy();
+    solua_dlp_destroy();
+    solua_emotion_destroy();
 #if SOLAR_OS_PACKAGE_SERVICE_HTTP_CLIENT
     solua_http_stream_destroy();
     solua_http_session_destroy();
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_SERVO
+    const esp_err_t servo_cleanup = solar_os_servo_release_owner("lua");
+    if (servo_cleanup != ESP_OK) SOLAR_OS_LOGW(TAG, "Servo cleanup: %s", esp_err_to_name(servo_cleanup));
 #endif
     solar_os_rtc_release_owner("lua");
     lua_close(L);
@@ -7403,8 +8839,14 @@ cleanup:
 #if SOLAR_OS_PACKAGE_SERVICE_HID
     solar_os_hid_release_all();
 #endif
+#if SOLAR_OS_PACKAGE_SERVICE_IMAGE
+    if (solua_runtime_state != NULL) {
+        solua_image_close_all_handles();
+    }
+#endif
     solua_runner_control = NULL;
     solua_runtime_release(SOLUA_RUNTIME_OWNER_RUNNER);
+    solar_os_memory_free(runner_state);
     return result->status;
 }
 
@@ -7472,6 +8914,10 @@ static void solua_task(void *arg)
     }
 
 done:
+    solar_os_input_release_keyboard(&solua);
+#if SOLAR_OS_PACKAGE_SERVICE_IMAGE
+    solua_image_close_all_handles();
+#endif
     if (L != NULL) {
 #if SOLAR_OS_PACKAGE_SERVICE_HID
         solar_os_hid_release_all();
@@ -7488,9 +8934,17 @@ done:
 #if SOLAR_OS_PACKAGE_SERVICE_NET
         solua_net_destroy();
 #endif
+        solua_inference_destroy();
+        solua_media_destroy();
+        solua_dlp_destroy();
+        solua_emotion_destroy();
 #if SOLAR_OS_PACKAGE_SERVICE_HTTP_CLIENT
         solua_http_stream_destroy();
         solua_http_session_destroy();
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_SERVO
+        const esp_err_t servo_cleanup = solar_os_servo_release_owner("lua");
+        if (servo_cleanup != ESP_OK) SOLAR_OS_LOGW(TAG, "Servo cleanup: %s", esp_err_to_name(servo_cleanup));
 #endif
         solar_os_rtc_release_owner("lua");
         lua_close(L);
@@ -7562,20 +9016,24 @@ static esp_err_t solua_start(solar_os_context_t *ctx)
     solar_os_context_set_app_class(
         ctx,
         repl_mode ? SOLAR_OS_APP_CLASS_TUI : SOLAR_OS_APP_CLASS_COMMAND);
-    solar_os_shell_io_t *io = solua_io(ctx);
     if (!solua_runtime_claim(SOLUA_RUNTIME_OWNER_APP)) {
-        solar_os_shell_io_writeln(io, "lua: runtime is already in use");
-        solar_os_shell_io_flush(io);
+        solar_os_shell_io_t *io = solar_os_context_shell_io(ctx);
+        if (io != NULL) {
+            solar_os_shell_io_writeln(io, "lua: runtime is already in use");
+            solar_os_shell_io_flush(io);
+        }
         solua_return_to_shell(ctx, 1, "lua: runtime is already in use");
         return ESP_OK;
     }
+
+    solua_runtime_state = (solua_cold_state_t *)solua_app_state;
 
     memset(&solua, 0, sizeof(solua));
     solua.ctx = ctx;
     solua.session_terminal = solar_os_context_terminal(ctx);
     solua.session_gfx = solar_os_context_gfx(ctx);
 
-    io = solua_io(ctx);
+    solar_os_shell_io_t *io = solua_io(ctx);
     solua.session_io = io;
     if (argc > SOLAR_OS_APP_ARG_MAX) {
         solar_os_shell_io_writeln(io, "lua: too many arguments");
@@ -7772,11 +9230,22 @@ static void solua_stop(solar_os_context_t *ctx)
                                            NULL,
                                            SOLUA_STOP_WAIT_MS,
                                            20U)) {
-            SOLAR_OS_LOGW(TAG, "force stopping unresponsive Lua task");
-            solar_os_task_delete(solua.task);
-            solua.task = NULL;
-            solua.task_done = true;
-            solua.vm_active = false;
+            /* Media or inference can be inside a driver or joining a native
+             * worker. Never delete that owner task mid-call.
+             * Interpreter cancellation remains active while we wait. */
+            while ((__atomic_load_n(&solua_media_session, __ATOMIC_ACQUIRE) != NULL ||
+                    solua_inference_active() || solua_imlib_active() || solua_emotion_active()) &&
+                   !solua_task_stopped(NULL)) {
+                (void)solar_os_script_wait_for_stop(solua_task_stopped, NULL,
+                    SOLUA_STOP_WAIT_MS, 20U);
+            }
+            if (!solua_task_stopped(NULL)) {
+                SOLAR_OS_LOGW(TAG, "force stopping unresponsive Lua task");
+                solar_os_task_delete(solua.task);
+                solua.task = NULL;
+                solua.task_done = true;
+                solua.vm_active = false;
+            }
         }
     }
 
@@ -7785,6 +9254,9 @@ static void solua_stop(solar_os_context_t *ctx)
         solua.tui_active = false;
     }
     if (solua.events != NULL) {
+#if SOLAR_OS_PACKAGE_SERVICE_IMAGE
+        solua_image_release_pending_events(solua.events);
+#endif
         solar_os_queue_delete(solua.events);
         solua.events = NULL;
     }
@@ -7797,9 +9269,11 @@ static void solua_stop(solar_os_context_t *ctx)
         solua.key_input = NULL;
     }
     if (solua.device_input != NULL) {
+        solar_os_input_release_keyboard(&solua);
         solar_os_queue_delete(solua.device_input);
         solua.device_input = NULL;
     }
+    solua_emotion_destroy();
     solua_gfx_release_target();
 #if SOLAR_OS_PACKAGE_SERVICE_SYNTH
     (void)solar_os_synth_voice_stop(SOLUA_SYNTH_OWNER);
@@ -7816,9 +9290,15 @@ static void solua_stop(solar_os_context_t *ctx)
 #if SOLAR_OS_PACKAGE_SERVICE_NET
     solua_net_destroy();
 #endif
+    solua_inference_destroy();
+    solua_media_destroy();
+    solua_dlp_destroy();
 #if SOLAR_OS_PACKAGE_SERVICE_HTTP_CLIENT
     solua_http_stream_destroy();
     solua_http_session_destroy();
+#endif
+#if SOLAR_OS_PACKAGE_SERVICE_IMAGE
+    solua_image_close_all_handles();
 #endif
     solua_runtime_release(SOLUA_RUNTIME_OWNER_APP);
 }
@@ -7939,6 +9419,7 @@ static void solua_repl_submit(solar_os_context_t *ctx)
 
 static void solua_apply_tui_event(solar_os_context_t *ctx, const solua_event_t *event)
 {
+    if (solua_emotion_drawing()) return;
     if (event == NULL) {
         return;
     }
@@ -8026,6 +9507,15 @@ static void solua_apply_gfx_event(solar_os_context_t *ctx, const solua_event_t *
         return;
     }
 
+#if SOLAR_OS_PACKAGE_SERVICE_EMOTION
+    if (event->type == SOLUA_EVENT_EMOTION_MODE) {
+        solar_os_context_set_streaming_graphics_active(ctx, event->attr != 0);
+        if (!event->attr && solua.session_terminal) solar_os_terminal_draw(solua.session_terminal);
+        __atomic_store_n(&solua_runtime_state->emotion_ack, true, __ATOMIC_RELEASE);
+        return;
+    }
+#endif
+    if (solua_emotion_drawing()) return;
     switch (event->type) {
     case SOLUA_EVENT_GFX_BEGIN:
         solar_os_context_set_graphics_active(ctx, true);
@@ -8042,6 +9532,27 @@ static void solua_apply_gfx_event(solar_os_context_t *ctx, const solua_event_t *
     }
 
     solar_os_gfx_t *gfx = solua_current_gfx();
+#if SOLAR_OS_PACKAGE_SERVICE_IMAGE
+    if (event->type == SOLUA_EVENT_IMAGE_DRAW) {
+        solar_os_raster_image_t *image =
+            (solar_os_raster_image_t *)event->object;
+        if (gfx != NULL && image != NULL) {
+            const esp_err_t err = event->attr == 1 ?
+                solar_os_raster_image_present(image, gfx, event->x0, event->y0, event->width, event->height) :
+                solar_os_raster_image_draw(image,
+                                                              gfx,
+                                                              (int)event->x0,
+                                                              (int)event->y0,
+                                                              event->width,
+                                                              event->height);
+            if (err != ESP_OK) {
+                SOLAR_OS_LOGW(TAG, "image draw failed: %s", esp_err_to_name(err));
+            }
+        }
+        solar_os_raster_image_release(image);
+        return;
+    }
+#endif
     if (gfx == NULL) {
         return;
     }
@@ -8166,6 +9677,7 @@ static void solua_drain_events(solar_os_context_t *ctx)
         case SOLUA_EVENT_TUI_INPUT:
             solua_apply_tui_event(ctx, &event);
             break;
+        case SOLUA_EVENT_EMOTION_MODE:
         case SOLUA_EVENT_GFX_BEGIN:
         case SOLUA_EVENT_GFX_END:
         case SOLUA_EVENT_GFX_CLEAR:
@@ -8180,6 +9692,9 @@ static void solua_drain_events(solar_os_context_t *ctx)
         case SOLUA_EVENT_GFX_FILL_CIRCLE:
         case SOLUA_EVENT_GFX_ICON:
         case SOLUA_EVENT_GFX_BITMAP:
+#if SOLAR_OS_PACKAGE_SERVICE_IMAGE
+        case SOLUA_EVENT_IMAGE_DRAW:
+#endif
         case SOLUA_EVENT_GFX_TEXT:
             solua_apply_gfx_event(ctx, &event);
             break;
@@ -8192,6 +9707,9 @@ static void solua_drain_events(solar_os_context_t *ctx)
             }
             solua_gfx_release_target();
             solar_os_context_set_graphics_active(ctx, false);
+            if (ctx->requested_app != NULL) {
+                break;
+            }
             if (solua.mode == SOLUA_MODE_SCRIPT || solua.repl_exit_requested) {
                 solua_finish_terminal_line(ctx, io);
                 solua_flush_io(ctx, io);
@@ -8253,7 +9771,8 @@ static bool solua_event(solar_os_context_t *ctx, const solar_os_event_t *event)
     }
 
     if (event->type == SOLAR_OS_EVENT_POINTER ||
-        event->type == SOLAR_OS_EVENT_AXIS) {
+        event->type == SOLAR_OS_EVENT_AXIS ||
+        event->type == SOLAR_OS_EVENT_GESTURE) {
         solua_queue_device_input(event);
         return true;
     }
@@ -8351,15 +9870,50 @@ static bool solua_event(solar_os_context_t *ctx, const solar_os_event_t *event)
     return true;
 }
 
+#if SOLAR_OS_PACKAGE_SERVICE_EMOTION
+static void solua_emotion_visibility(solar_os_context_t *ctx, bool visible)
+{
+    /* An in-flight open can be waiting for a graphics-mode acknowledgement.
+     * Drain it before waiting for exclusive access to the face handles. */
+    while (__atomic_exchange_n(&solua_runtime_state->emotion_busy, true, __ATOMIC_ACQ_REL)) {
+        solua_drain_events(ctx);
+        vTaskDelay(1);
+    }
+    solua_runtime_state->emotion_suspended = !visible;
+    for (unsigned i = 0; i < 4; ++i) {
+        solar_os_emotion_t *face = solua_runtime_state->emotions[i];
+        if (!solar_os_emotion_uses_gfx(face, solua.session_gfx)) continue;
+        esp_err_t err;
+        do {
+            err = visible ? solar_os_emotion_resume(face) : solar_os_emotion_suspend(face);
+            if (err != ESP_OK) {
+                SOLAR_OS_LOGW(TAG, "emotion visibility: %s", esp_err_to_name(err));
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+        } while (err != ESP_OK && !visible);
+    }
+    __atomic_store_n(&solua_runtime_state->emotion_busy, false, __ATOMIC_RELEASE);
+}
+static void solua_emotion_suspend(solar_os_context_t *ctx)
+{ solua_emotion_visibility(ctx, false); }
+static void solua_emotion_resume(solar_os_context_t *ctx)
+{ solua_emotion_visibility(ctx, true); }
+#endif
+
 const solar_os_app_t solar_os_lua_app = {
     .name = "lua",
     .summary = "Lua runtime",
     .app_class = SOLAR_OS_APP_CLASS_TUI,
-    .flags = SOLAR_OS_APP_FLAG_POINTER_EVENTS | SOLAR_OS_APP_FLAG_AXIS_EVENTS,
+    .flags = SOLAR_OS_APP_FLAG_POINTER_EVENTS | SOLAR_OS_APP_FLAG_AXIS_EVENTS |
+        SOLAR_OS_APP_FLAG_GESTURE_EVENTS | SOLAR_OS_APP_FLAG_RESUME_SNAPSHOT,
     .start = solua_start,
+#if SOLAR_OS_PACKAGE_SERVICE_EMOTION
+    .suspend = solua_emotion_suspend,
+    .resume = solua_emotion_resume,
+#endif
     .stop = solua_stop,
     .event = solua_event,
-    .state_slot = &solua_state,
+    .state_slot = &solua_app_state,
     .state_size = sizeof(solua_cold_state_t),
     .state_storage = SOLAR_OS_APP_STATE_EXTERNAL_PREFERRED,
     .worker_stack_bytes = SOLUA_TASK_STACK,

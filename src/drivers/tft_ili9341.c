@@ -12,6 +12,9 @@
 #include "pwm_port.h"
 #include "solar_os_buses.h"
 #include "solar_os_vector.h"
+#include "solar_os_rgb565.h"
+#include "solar_os_indexed_raster.h"
+#include "solar_os_memory.h"
 #define ILI9341_RGB565_BLACK 0x0000
 #define ILI9341_RGB565_WHITE 0xffff
 #define ILI9341_DMA_LINES 4U
@@ -232,6 +235,7 @@ static esp_err_t ili9341_configure_control_pins(tft_ili9341_t *display) {
   pin_mask |= gpio_pin_mask(display->config.dc_pin);
   pin_mask |= gpio_pin_mask(display->config.reset_pin);
   pin_mask |= gpio_pin_mask(display->config.backlight_pin);
+  pin_mask |= gpio_pin_mask(display->config.power_pin);
 
   if (pin_mask == 0) {
     return ESP_ERR_INVALID_ARG;
@@ -250,6 +254,18 @@ static esp_err_t ili9341_configure_control_pins(tft_ili9341_t *display) {
   if (gpio_valid(display->config.reset_pin)) {
     ESP_RETURN_ON_ERROR(gpio_set_level(display->config.reset_pin, 1), TAG,
                         "rst high failed");
+  }
+  if (gpio_valid(display->config.power_pin)) {
+    /* A panel rail can also supply storage and the keyboard (T-Deck). Light
+     * sleep must not float it and reset those still-mounted peripherals. */
+    ESP_RETURN_ON_ERROR(gpio_sleep_sel_dis(display->config.power_pin), TAG,
+                        "panel power sleep retention failed");
+    (void)gpio_hold_dis(display->config.power_pin);
+    ESP_RETURN_ON_ERROR(
+        gpio_set_level(display->config.power_pin,
+                       display->config.power_active_high ? 1 : 0),
+        TAG, "panel power enable failed");
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
   return ESP_OK;
 }
@@ -787,21 +803,6 @@ static void ili9341_logical_to_native(const tft_ili9341_t *display,
   }
 }
 
-static uint8_t ili9341_index2_pixel(const solar_os_display_raster_t *frame,
-                                    uint16_t x, uint16_t y) {
-  const uint8_t packed =
-      frame->data[(size_t)y * frame->source_stride + (size_t)(x >> 2U)];
-  return (uint8_t)((packed >> ((x & 3U) * 2U)) & 3U);
-}
-
-static void ili9341_index2_set(uint8_t *data, uint16_t stride,
-                              uint16_t x, uint16_t y, uint8_t index) {
-  uint8_t *packed = &data[(size_t)y * stride + (x >> 2U)];
-  const unsigned shift = (x & 3U) * 2U;
-  *packed = (uint8_t)((*packed & (uint8_t)~(3U << shift)) |
-                      ((index & 3U) << shift));
-}
-
 static esp_err_t ili9341_prepare_native_frame(
     tft_ili9341_t *display, const solar_os_display_raster_t *frame,
     solar_os_display_raster_t *native_frame) {
@@ -812,42 +813,42 @@ static esp_err_t ili9341_prepare_native_frame(
 
   const bool quarter_turn = display->u8g2.cb == U8G2_R1 ||
                             display->u8g2.cb == U8G2_R3;
+  const bool rgb565 = frame->format == SOLAR_OS_DISPLAY_FORMAT_RGB565;
+  if (rgb565 && quarter_turn && frame->source_height > UINT16_MAX / 2U) {
+    return ESP_ERR_INVALID_SIZE;
+  }
   const uint16_t width = quarter_turn ?
       frame->source_height : frame->source_width;
   const uint16_t height = quarter_turn ?
       frame->source_width : frame->source_height;
-  const uint16_t stride = (uint16_t)((width + 3U) / 4U);
+  const uint16_t stride = rgb565 ? (uint16_t)(width * 2U) :
+      (frame->format == SOLAR_OS_DISPLAY_FORMAT_INDEX8 ? width :
+       (uint16_t)((width + 3U) / 4U));
   const size_t size = (size_t)stride * height;
   if (display->frame_scratch_size < size) {
-    uint8_t *scratch = heap_caps_malloc_prefer(
-        size, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    /* Rotation is CPU-only storage. Use the managed pool: the SDK preference
+     * allocator cannot see its free PSRAM and can exhaust internal memory. */
+    uint8_t *scratch = solar_os_memory_alloc(size,
+        rgb565 ? SOLAR_OS_MEMORY_EXTERNAL_REQUIRED :
+                 SOLAR_OS_MEMORY_EXTERNAL_PREFERRED, "display.rotate");
     if (scratch == NULL) {
       return ESP_ERR_NO_MEM;
     }
-    heap_caps_free(display->frame_scratch);
+    solar_os_memory_free(display->frame_scratch);
     display->frame_scratch = scratch;
     display->frame_scratch_size = size;
   }
-  memset(display->frame_scratch, 0, size);
-  for (uint16_t source_y = 0U; source_y < frame->source_height; source_y++) {
-    for (uint16_t source_x = 0U; source_x < frame->source_width; source_x++) {
-      uint16_t target_x = source_x;
-      uint16_t target_y = source_y;
-      if (display->u8g2.cb == U8G2_R1) {
-        target_x = (uint16_t)(frame->source_height - 1U - source_y);
-        target_y = source_x;
-      } else if (display->u8g2.cb == U8G2_R2) {
-        target_x = (uint16_t)(frame->source_width - 1U - source_x);
-        target_y = (uint16_t)(frame->source_height - 1U - source_y);
-      } else if (display->u8g2.cb == U8G2_R3) {
-        target_x = source_y;
-        target_y = (uint16_t)(frame->source_width - 1U - source_x);
-      }
-      ili9341_index2_set(
-          display->frame_scratch, stride, target_x, target_y,
-          ili9341_index2_pixel(frame, source_x, source_y));
-    }
+  if (rgb565) {
+    solar_os_rgb565_rotate(frame->data, frame->source_width, frame->source_height,
+        frame->source_stride, display->frame_scratch, stride,
+        display->u8g2.cb == U8G2_R1 ? SOLAR_OS_DISPLAY_ROTATION_90 :
+        display->u8g2.cb == U8G2_R2 ? SOLAR_OS_DISPLAY_ROTATION_180 : SOLAR_OS_DISPLAY_ROTATION_270);
+  } else {
+    memset(display->frame_scratch, 0, size);
+    solar_os_indexed_rotate(frame->data, frame->source_width, frame->source_height,
+        frame->source_stride, display->frame_scratch, stride, frame->format,
+        display->u8g2.cb == U8G2_R1 ? SOLAR_OS_DISPLAY_ROTATION_90 :
+        display->u8g2.cb == U8G2_R2 ? SOLAR_OS_DISPLAY_ROTATION_180 : SOLAR_OS_DISPLAY_ROTATION_270);
   }
   native_frame->data = display->frame_scratch;
   native_frame->data_size = size;
@@ -861,30 +862,18 @@ static void ili9341_frame_line(const solar_os_display_raster_t *frame,
                                uint16_t output_width,
                                uint16_t output_height,
                                uint16_t output_y,
-                               const uint16_t colors[4],
+                               const uint16_t *colors,
                                uint8_t *line_buffer) {
   const uint16_t source_y = (uint16_t)(
       (uint32_t)output_y * frame->source_height / output_height);
   const uint8_t *source = frame->data +
       (size_t)source_y * frame->source_stride;
-  uint16_t source_x = 0U;
-  uint32_t scale_accumulator = 0U;
-  uint16_t swapped_colors[4];
-  for (size_t i = 0U; i < 4U; i++) {
-    swapped_colors[i] = __builtin_bswap16(colors[i]);
+  if (frame->format == SOLAR_OS_DISPLAY_FORMAT_RGB565) {
+    solar_os_rgb565_scale_row(source, frame->source_width, line_buffer, output_width);
+    return;
   }
-  uint16_t *output = (uint16_t *)line_buffer;
-  for (uint16_t x = 0U; x < output_width; x++) {
-    const uint8_t packed = source[source_x >> 2U];
-    const uint8_t index =
-        (uint8_t)((packed >> ((source_x & 3U) * 2U)) & 3U);
-    output[x] = swapped_colors[index];
-    scale_accumulator += frame->source_width;
-    while (scale_accumulator >= output_width) {
-      scale_accumulator -= output_width;
-      source_x++;
-    }
-  }
+  solar_os_indexed_scale_row(source, frame->source_width, frame->format,
+      colors, line_buffer, output_width);
 }
 
 typedef struct {
@@ -906,7 +895,8 @@ static void ili9341_render_frame_line(tft_ili9341_t *display,
   if (lines->frame->clear_background) {
     uint16_t *pixels = (uint16_t *)output;
     const uint16_t background = __builtin_bswap16(
-        lines->colors[lines->frame->background_index & 3U]);
+        lines->frame->format == SOLAR_OS_DISPLAY_FORMAT_RGB565 ? lines->frame->background_rgb565 :
+        lines->colors[lines->frame->background_index]);
     for (uint16_t x = 0U; x < width; x++) {
       pixels[x] = background;
     }
@@ -927,11 +917,22 @@ static void ili9341_render_frame_line(tft_ili9341_t *display,
 esp_err_t tft_ili9341_present_frame(
     tft_ili9341_t *display, const solar_os_display_raster_t *frame) {
   if (display == NULL || display->spi == NULL || frame == NULL ||
-      frame->format != SOLAR_OS_DISPLAY_FORMAT_INDEX2 || frame->data == NULL ||
-      frame->palette_rgb565 == NULL || frame->palette_size < 4U ||
+      (frame->format != SOLAR_OS_DISPLAY_FORMAT_INDEX2 &&
+       frame->format != SOLAR_OS_DISPLAY_FORMAT_INDEX8 &&
+       frame->format != SOLAR_OS_DISPLAY_FORMAT_RGB565) || frame->data == NULL ||
+      (frame->format != SOLAR_OS_DISPLAY_FORMAT_RGB565 &&
+       (frame->palette_rgb565 == NULL || frame->palette_size <
+        (frame->format == SOLAR_OS_DISPLAY_FORMAT_INDEX8 ? 256U : 4U))) ||
       frame->source_width == 0 || frame->source_height == 0 ||
       frame->width == 0 || frame->height == 0 ||
-      frame->source_stride < (frame->source_width + 3U) / 4U) {
+      frame->source_stride < (frame->format == SOLAR_OS_DISPLAY_FORMAT_RGB565 ?
+          (size_t)frame->source_width * 2U :
+          (frame->format == SOLAR_OS_DISPLAY_FORMAT_INDEX8 ? frame->source_width :
+           (frame->source_width + 3U) / 4U)) ||
+      frame->source_height > SIZE_MAX / frame->source_stride ||
+      frame->data_size < (size_t)frame->source_height * frame->source_stride ||
+      (frame->format == SOLAR_OS_DISPLAY_FORMAT_RGB565 && frame->palette_inverted) ||
+      (frame->clear_background && frame->format == SOLAR_OS_DISPLAY_FORMAT_INDEX2 && frame->background_index >= 4U)) {
     return ESP_ERR_INVALID_ARG;
   }
 
@@ -977,11 +978,10 @@ esp_err_t tft_ili9341_present_frame(
   ESP_RETURN_ON_ERROR(
       ili9341_prepare_native_frame(display, frame, &native_frame), TAG,
       "frame rotation failed");
-  uint16_t colors[4];
-  for (size_t i = 0U; i < 4U; i++) {
-    colors[i] = frame->palette_rgb565[
-        frame->palette_inverted ? 3U - i : i];
-  }
+  uint16_t colors[256];
+  if (frame->format != SOLAR_OS_DISPLAY_FORMAT_RGB565)
+    solar_os_indexed_palette(frame->palette_rgb565, frame->format,
+        frame->palette_inverted, colors);
   const ili9341_frame_lines_t lines = {
       .frame = &native_frame,
       .colors = colors,
@@ -1028,7 +1028,50 @@ static esp_err_t ili9341_full_init(tft_ili9341_t *display) {
   }
   vTaskDelay(pdMS_TO_TICKS(120));
 
-  if (display->config.st7796) {
+  if (display->config.st7789) {
+    const uint8_t colmod[] = {0x55};
+    const uint8_t madctl[] = {display->config.madctl};
+    const uint8_t porch[] = {0x0c, 0x0c, 0x00, 0x33, 0x33};
+    const uint8_t gate[] = {0x75};
+    const uint8_t vcom[] = {0x1a};
+    const uint8_t lcm[] = {0x2c};
+    const uint8_t vdv_enable[] = {0x01};
+    const uint8_t vrh[] = {0x13};
+    const uint8_t vdv[] = {0x20};
+    const uint8_t frame_rate[] = {0x0f};
+    const uint8_t power[] = {0xa4, 0xa1};
+    const uint8_t gate_control[] = {0xa1};
+    const uint8_t gamma_pos[] = {
+        0xd0, 0x0d, 0x14, 0x0d, 0x0d, 0x09, 0x38,
+        0x44, 0x4e, 0x3a, 0x17, 0x18, 0x2f, 0x30,
+    };
+    const uint8_t gamma_neg[] = {
+        0xd0, 0x09, 0x0f, 0x08, 0x07, 0x14, 0x37,
+        0x44, 0x4d, 0x38, 0x15, 0x16, 0x2c, 0x3e,
+    };
+
+    if (!ili9341_checked_cmd(display, 0x11)) {
+      return display->last_error;
+    }
+    vTaskDelay(pdMS_TO_TICKS(120));
+    if (!ili9341_checked_cmd_data(display, 0x3a, colmod, sizeof(colmod)) ||
+        !ili9341_checked_cmd_data(display, 0x36, madctl, sizeof(madctl)) ||
+        !ili9341_checked_cmd_data(display, 0xb2, porch, sizeof(porch)) ||
+        !ili9341_checked_cmd_data(display, 0xb7, gate, sizeof(gate)) ||
+        !ili9341_checked_cmd_data(display, 0xbb, vcom, sizeof(vcom)) ||
+        !ili9341_checked_cmd_data(display, 0xc0, lcm, sizeof(lcm)) ||
+        !ili9341_checked_cmd_data(display, 0xc2, vdv_enable, sizeof(vdv_enable)) ||
+        !ili9341_checked_cmd_data(display, 0xc3, vrh, sizeof(vrh)) ||
+        !ili9341_checked_cmd_data(display, 0xc4, vdv, sizeof(vdv)) ||
+        !ili9341_checked_cmd_data(display, 0xc6, frame_rate, sizeof(frame_rate)) ||
+        !ili9341_checked_cmd_data(display, 0xd0, power, sizeof(power)) ||
+        !ili9341_checked_cmd_data(display, 0xd6, gate_control, sizeof(gate_control)) ||
+        !ili9341_checked_cmd_data(display, 0xe0, gamma_pos, sizeof(gamma_pos)) ||
+        !ili9341_checked_cmd_data(display, 0xe1, gamma_neg, sizeof(gamma_neg)) ||
+        !ili9341_checked_cmd(display, 0x21)) {
+      return display->last_error;
+    }
+  } else if (display->config.st7796) {
     const uint8_t f0_enable_1[] = {0xc3};
     const uint8_t f0_enable_2[] = {0x96};
     const uint8_t madctl[] = {display->config.madctl};
@@ -1134,8 +1177,9 @@ static esp_err_t ili9341_full_init(tft_ili9341_t *display) {
   if (!ili9341_checked_cmd(display, 0x29)) {
     return display->last_error;
   }
-  /* The FNK0104S panel requires display inversion on for literal RGB colors. */
-  if (display->config.st7796 && !ili9341_checked_cmd(display, 0x21)) {
+  /* Some IPS panels require display inversion on for literal RGB colors. */
+  if ((display->config.st7796 || display->config.invert_color) &&
+      !ili9341_checked_cmd(display, 0x21)) {
     return display->last_error;
   }
   vTaskDelay(pdMS_TO_TICKS(20));
@@ -1290,6 +1334,20 @@ esp_err_t tft_ili9341_init(tft_ili9341_t *display,
   return display->last_error;
 }
 
+esp_err_t tft_ili9341_shutdown(tft_ili9341_t *display) {
+  if (display == NULL) return ESP_ERR_INVALID_ARG;
+  u8g2_SetPowerSave(&display->u8g2, 1);
+  if (!gpio_valid(display->config.power_pin)) return ESP_OK;
+  const esp_err_t err = gpio_set_level(display->config.power_pin,
+      display->config.power_active_high ? 0 : 1);
+  if (err == ESP_OK) {
+    const esp_err_t hold_err = gpio_hold_en(display->config.power_pin);
+    if (hold_err != ESP_OK) return hold_err;
+    gpio_deep_sleep_hold_en();
+  }
+  return err;
+}
+
 esp_err_t tft_ili9341_resume(tft_ili9341_t *display) {
   if (display == NULL || display->spi == NULL || display->buffer == NULL ||
       display->line_buffer == NULL || display->line_buffer_alt == NULL) {
@@ -1357,7 +1415,7 @@ void tft_ili9341_deinit(tft_ili9341_t *display) {
     display->shadow = NULL;
   }
   if (display->frame_scratch != NULL) {
-    heap_caps_free(display->frame_scratch);
+    solar_os_memory_free(display->frame_scratch);
     display->frame_scratch = NULL;
     display->frame_scratch_size = 0U;
   }

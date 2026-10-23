@@ -14,6 +14,8 @@ PYTHON_BINDINGS = PYTHON_SOURCE + (
 ).read_text(encoding="utf-8") + (
     REPOSITORY / "src/apps/solar_os_python_ftp.inc"
 ).read_text(encoding="utf-8") + (
+    REPOSITORY / "src/apps/solar_os_python_sftpsync.inc"
+).read_text(encoding="utf-8") + (
     REPOSITORY / "src/apps/solar_os_python_ble.inc"
 ).read_text(encoding="utf-8")
 LUA_BINDINGS = LUA_SOURCE + (
@@ -21,8 +23,15 @@ LUA_BINDINGS = LUA_SOURCE + (
 ).read_text(encoding="utf-8") + (
     REPOSITORY / "src/apps/solar_os_lua_ftp.inc"
 ).read_text(encoding="utf-8") + (
+    REPOSITORY / "src/apps/solar_os_lua_sftpsync.inc"
+).read_text(encoding="utf-8") + (
     REPOSITORY / "src/apps/solar_os_lua_ble.inc"
 ).read_text(encoding="utf-8")
+PYTHON_BINDINGS += (REPOSITORY / "src/apps/solar_os_python_media.inc").read_text(encoding="utf-8")
+LUA_BINDINGS += (REPOSITORY / "src/apps/solar_os_lua_media.inc").read_text(encoding="utf-8")
+for stem in ("image_rgb", "tensor_image", "inference", "pipeline", "imlib", "dlp", "emotion"):
+    PYTHON_BINDINGS += (REPOSITORY / f"src/apps/solar_os_python_{stem}.inc").read_text(encoding="utf-8")
+    LUA_BINDINGS += (REPOSITORY / f"src/apps/solar_os_lua_{stem}.inc").read_text(encoding="utf-8")
 DESCRIPTOR = (REPOSITORY / "src/apps/solar_os_script_api.inc").read_text(
     encoding="utf-8"
 )
@@ -45,7 +54,7 @@ class ScriptBindingDescriptorTest(unittest.TestCase):
             DESCRIPTOR,
             re.MULTILINE,
         )
-        self.assertEqual(len(modules), 42)
+        self.assertEqual(len(modules), 61)
         self.assertEqual(len(modules), len(set(modules)))
         self.assertNotRegex(PYTHON_SOURCE, r'python_new_submodule\(module,\s*"')
         self.assertNotRegex(LUA_SOURCE, r'solua_new_submodule\(L,\s*solaros,\s*"')
@@ -64,15 +73,32 @@ class ScriptBindingDescriptorTest(unittest.TestCase):
             self.assertTrue(
                 python_handler in PYTHON_BINDINGS
                 or f"PYTHON_{module.upper()}_BODY_METHOD({native_name},"
-                in PYTHON_BINDINGS,
+                in PYTHON_BINDINGS
+                or (module == "vision" and f"PYTHON_IMLIB_FUNCTION({native_name}," in PYTHON_BINDINGS),
                 python_handler,
             )
             self.assertTrue(
                 lua_handler in LUA_BINDINGS
                 or f"SOLUA_{module.upper()}_BODY_METHOD({native_name},"
-                in LUA_BINDINGS,
+                in LUA_BINDINGS
+                or (module == "vision" and f"SOLUA_IMLIB_FUNCTION({native_name}," in LUA_BINDINGS),
                 lua_handler,
             )
+
+    def test_dlp_teardown_does_not_depend_on_http(self):
+        for source, prefix in ((PYTHON_SOURCE, "python"), (LUA_SOURCE, "solua")):
+            scopes = []
+            calls = 0
+            for line in source.splitlines():
+                directive = line.strip()
+                if re.match(r"#\s*if(?:def|ndef)?\b", directive):
+                    scopes.append(directive)
+                elif re.match(r"#\s*endif\b", directive):
+                    scopes.pop()
+                if f"{prefix}_dlp_destroy();" in line:
+                    calls += 1
+                    self.assertFalse(any("HTTP_CLIENT" in scope for scope in scopes))
+            self.assertEqual(calls, 3)
 
     def test_named_and_nested_handlers_exist_in_both_interpreters(self):
         named = re.findall(
@@ -80,7 +106,7 @@ class ScriptBindingDescriptorTest(unittest.TestCase):
             r"(\w+),\s*(\w+),\s*(\w+),\s*(\w+)\);",
             DESCRIPTOR,
         )
-        self.assertEqual(len(named), 2)
+        self.assertEqual(len(named), 3)
         for _module, _public_name, python_native, lua_native in named:
             self.assertIn(python_native, PYTHON_BINDINGS)
             self.assertIn(lua_native, LUA_BINDINGS)
@@ -91,14 +117,45 @@ class ScriptBindingDescriptorTest(unittest.TestCase):
             DESCRIPTOR,
             re.MULTILINE,
         )
-        self.assertEqual(len(nested), 16)
+        self.assertEqual(len(nested), 48)
+        self.assertTrue({("ble", "hid", name, name) for name in
+                         ("hosts", "connect", "forget", "disconnect")}.issubset(set(nested)))
         for module, submodule, _public_name, native_name in nested:
+            python_handler = f"solaros_{module}_{submodule}_{native_name}_obj"
+            lua_handler = f"solua_{module}_{submodule}_{native_name}"
+            self.assertTrue(
+                python_handler in PYTHON_BINDINGS
+                or (
+                    module == "ble"
+                    and submodule == "server"
+                    and f"PYTHON_BLE_SERVER_SIMPLE({native_name}," in PYTHON_BINDINGS
+                ),
+                python_handler,
+            )
+            self.assertTrue(
+                lua_handler in LUA_BINDINGS
+                or (
+                    module == "ble"
+                    and submodule == "server"
+                    and f"SOLUA_BLE_SERVER_SIMPLE({native_name}," in LUA_BINDINGS
+                ),
+                lua_handler,
+            )
+
+        subnested = re.findall(
+            r"^SOLAR_OS_SCRIPT_API_SUBSUBMODULE_FUNCTION\("
+            r"(\w+),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+)\);$",
+            DESCRIPTOR,
+            re.MULTILINE,
+        )
+        self.assertEqual(len(subnested), 9)
+        for module, submodule, child, _public_name, native_name in subnested:
             self.assertIn(
-                f"solaros_{module}_{submodule}_{native_name}_obj",
+                f"solaros_{module}_{submodule}_{child}_{native_name}_obj",
                 PYTHON_BINDINGS,
             )
             self.assertIn(
-                f"solua_{module}_{submodule}_{native_name}",
+                f"solua_{module}_{submodule}_{child}_{native_name}",
                 LUA_BINDINGS,
             )
 
@@ -133,14 +190,35 @@ class ScriptBindingDescriptorTest(unittest.TestCase):
                 re.MULTILINE,
             )
         )
+        submodule_constant_count = len(
+            re.findall(
+                r"^SOLAR_OS_SCRIPT_API_SUBMODULE_(?:INT|UINT)\(",
+                DESCRIPTOR,
+                re.MULTILINE,
+            )
+        )
+        subnested_count = len(
+            re.findall(
+                r"^SOLAR_OS_SCRIPT_API_SUBSUBMODULE_FUNCTION\(",
+                DESCRIPTOR,
+                re.MULTILINE,
+            )
+        )
         hid_keycode_count = len(
             re.findall(
                 r"^SOLAR_OS_HID_KEY_CONSTANT\(", HID_KEYCODES, re.MULTILINE
             )
         )
+        hid_keycode_include_count = DESCRIPTOR.count(
+            '#include "solar_os_hid_keycodes.inc"'
+        )
         self.assertEqual(
-            sum(map(len, entries.values())) + nested_count + hid_keycode_count,
-            567,
+            sum(map(len, entries.values()))
+            + nested_count
+            + submodule_constant_count
+            + subnested_count
+            + hid_keycode_count * hid_keycode_include_count,
+            896,
         )
 
     def test_tui_and_gfx_export_modified_horizontal_navigation_keys(self):

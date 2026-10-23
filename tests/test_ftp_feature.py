@@ -1,4 +1,6 @@
 import unittest
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -13,6 +15,55 @@ FTP_APP = (ROOT / "src/apps/solar_os_ftp_app.c").read_text(encoding="utf-8")
 
 
 class FtpFeatureTest(unittest.TestCase):
+    def test_marked_operations_are_serial_and_stop_on_failure(self):
+        def section(start, end):
+            return start + FTP_APP.split(start, 1)[1].split(end, 1)[0]
+        source = section("static int ftp_app_name_compare", "static esp_err_t ftp_app_load_local")
+        source += section("static ftp_app_entry_t *ftp_app_selected", "static const char *ftp_app_default_viewer")
+        source += section("static void ftp_app_restore_position", "static esp_err_t ftp_app_change_local_dir")
+        source += section("static void ftp_app_poll", "static void ftp_app_open_selected")
+        types = section("typedef struct {\n    char name[SOLAR_OS_FTP_NAME_MAX]", "static void *ftp_app_state")
+        harness = (ROOT / "tests/host/ftp_selection_test.inc").read_text()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "test.c").write_text(harness.replace("/* TYPES */", types).replace("/* SOURCE */", source))
+            compiled = subprocess.run([
+                "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                str(path / "test.c"), "-o", str(path / "test"),
+            ], capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            subprocess.run([str(path / "test")], check=True)
+
+    def test_paging_and_hidden_items_on_foreground_panes(self):
+        def function(start, end):
+            return start + FTP_APP.split(start, 1)[1].split(end, 1)[0]
+        source = function("typedef struct {\n    char name[SOLAR_OS_FTP_NAME_MAX]", "typedef enum {")
+        source += function("static int ftp_app_name_compare", "static bool ftp_app_join")
+        source += function("static void ftp_app_filter_hidden", "static size_t ftp_app_selection_count")
+        source += function("static void ftp_app_page", "static bool ftp_app_event")
+        harness = (ROOT / "tests/host/ftp_navigation_test.inc").read_text()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "test.c").write_text(harness.replace("/* NAVIGATION_SOURCE */", source))
+            subprocess.run([
+                "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                str(path / "test.c"), "-o", str(path / "test"),
+            ], check=True, capture_output=True, text=True)
+            subprocess.run([str(path / "test")], check=True)
+
+    def test_both_apps_dispatch_paging_and_hidden_toggle(self):
+        self.assertIn("case SOLAR_OS_KEY_PAGE_UP:\n        ftp_app_page(pane, false)", FTP_APP)
+        self.assertIn("case SOLAR_OS_KEY_PAGE_DOWN:\n        ftp_app_page(pane, true)", FTP_APP)
+        self.assertIn("ftp_app_filter_hidden(&ftp_app.panes[0])", FTP_APP)
+        self.assertIn("ftp_app_filter_hidden(&ftp_app.panes[1])", FTP_APP)
+        parent = FTP_APP.split("case 0x7f: {", 1)[1].split("case '\\r':", 1)[0]
+        self.assertIn("ftp_app_change_local_dir(pane, parent)", parent)
+        self.assertIn("strlcpy(request.source, parent, sizeof(request.source))", parent)
+        remote = FTP_APP.split("static esp_err_t ftp_app_list_remote", 1)[1].split(
+            "static esp_err_t ftp_app_remove_local", 1
+        )[0]
+        self.assertNotIn("ftp_app_filter_hidden", remote)
+
     def test_service_app_and_job_are_independent_packages(self):
         self.assertIn("[packages.service_ftp]", PACKAGES)
         self.assertIn("[packages.app_ftp]", PACKAGES)
@@ -28,6 +79,29 @@ class FtpFeatureTest(unittest.TestCase):
         self.assertIn('ftp_begin_data_command(session, &data_fd, "RETR"', SERVICE)
         self.assertIn('ftp_begin_data_command(session, &data_fd, "STOR"', SERVICE)
         self.assertIn("solar_os_storage_replace_file", SERVICE)
+
+    def test_rejected_login_reopens_the_password_field(self):
+        self.assertIn("static esp_err_t ftp_expect_authentication", SERVICE)
+        self.assertIn("code == 430 || code == 530", SERVICE)
+        self.assertIn("return ESP_ERR_INVALID_CRC", SERVICE)
+        poll = FTP_APP.split("static void ftp_app_poll", 1)[1]
+        poll = poll.split("static void ftp_app_open_selected", 1)[0]
+        self.assertIn("result.error == ESP_ERR_INVALID_CRC", poll)
+        self.assertIn("ftp_app.connection.field = FTP_APP_CONNECT_PASSWORD", poll)
+
+    def test_connection_failures_keep_human_readable_socket_diagnostics(self):
+        self.assertIn("char *error;", (ROOT / "src/services/solar_os_ftp.h").read_text())
+        self.assertIn("connect_error == ECONNREFUSED", SERVICE)
+        self.assertIn('const char *message = "server unavailable"', SERVICE)
+        self.assertIn('message = "connection refused"', SERVICE)
+        self.assertIn('message = "host unreachable"', SERVICE)
+        self.assertIn('message = "network unreachable"', SERVICE)
+        self.assertIn(".error = result.detail", FTP_APP)
+        self.assertIn(
+            "result.detail[0] != '\\0' ?\n"
+            "                                    result.detail : esp_err_to_name(result.error)",
+            FTP_APP,
+        )
 
     def test_daemon_confines_paths_to_export_root(self):
         self.assertIn("ftpd_normalize_virtual", DAEMON)
@@ -48,6 +122,42 @@ class FtpFeatureTest(unittest.TestCase):
         self.assertIn("xQueueOverwrite(ftp_app.progress_events", FTP_APP)
         self.assertIn("ftp_app_restore_position", FTP_APP)
         self.assertIn("same_remote_path", FTP_APP)
+
+    def test_app_starts_disconnected_and_matches_files_operation_mnemonics(self):
+        self.assertIn('"F2 opens the connection setup"', FTP_APP)
+        self.assertIn("case SOLAR_OS_KEY_F2:", FTP_APP)
+        self.assertIn(
+            '"F2 Connect F3 View F5 Copy F6 Move F7 mKdir F8 Delete Alt+S Search Space Select"',
+            FTP_APP,
+        )
+        self.assertIn('{"Connect", 2U}', FTP_APP)
+        connect_cases = FTP_APP.split("case SOLAR_OS_KEY_F2:", 1)[1].split(
+            "ftp_app_begin_connection();", 1
+        )[0]
+        self.assertIn("case 'n':", connect_cases)
+        self.assertIn("case 'N':", connect_cases)
+        for binding in ("case 'V':", "case 'C':", "case 'M':", "case 'k':", "case 'K':", "case 'D':"):
+            self.assertIn(binding, FTP_APP)
+
+        event = FTP_APP.split("static bool ftp_app_event", 1)[1]
+        event = event.split("static void ftp_app_release_cleanup", 1)[0]
+        up_cases = event.split("case SOLAR_OS_KEY_UP:", 1)[1].split(
+            "case SOLAR_OS_KEY_DOWN:", 1
+        )[0]
+        down_cases = event.split("case SOLAR_OS_KEY_DOWN:", 1)[1].split(
+            "case SOLAR_OS_KEY_HOME:", 1
+        )[0]
+        self.assertNotIn("case 'k':", up_cases)
+        self.assertNotIn("case 'j':", down_cases)
+
+    def test_host_argument_keeps_the_existing_immediate_connect_behavior(self):
+        parser = FTP_APP.split("static esp_err_t ftp_app_parse_args", 1)[1]
+        parser = parser.split("static esp_err_t ftp_app_start", 1)[0]
+        self.assertIn("*connect_immediately = argc >= 2", parser)
+        self.assertIn(
+            "strlcpy(ftp_app.host, solar_os_context_argv(ctx, 1), sizeof(ftp_app.host))",
+            parser,
+        )
 
 
 if __name__ == "__main__":

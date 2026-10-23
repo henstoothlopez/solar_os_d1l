@@ -17,6 +17,9 @@
 #endif
 #if SOLAR_OS_PACKAGE_EXPANSION_SDMMC
 #include "driver/sdmmc_host.h"
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #endif
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -77,6 +80,7 @@ static int sdspi_runtime_cs = -1;
 #endif
 #if SOLAR_OS_PACKAGE_EXPANSION_SDMMC
 static int sdmmc_pins[6] = {-1, -1, -1, -1, -1, -1};
+static int sdmmc_power_pin = -1, sdmmc_power_active_level = 1;
 #endif
 #if SOLAR_OS_BOARD_STORAGE_SDSPI
 static sd_card_transport_t transport = SD_CARD_TRANSPORT_SDSPI_BOARD;
@@ -403,6 +407,28 @@ esp_err_t sd_card_configure_sdmmc(int clk_pin,
 #endif
 }
 
+esp_err_t sd_card_configure_sdmmc_power(int power_pin, int active_level)
+{
+#if SOLAR_OS_PACKAGE_EXPANSION_SDMMC && !SOLAR_OS_BOARD_STORAGE_SDSPI
+    if (transport != SD_CARD_TRANSPORT_SDMMC || card_ready) return ESP_ERR_INVALID_STATE;
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(power_pin) || (active_level != 0 && active_level != 1))
+        return ESP_ERR_INVALID_ARG;
+    for (size_t i = 0; i < 6; ++i)
+        if (sdmmc_pins[i] == power_pin) return ESP_ERR_INVALID_ARG;
+    const gpio_config_t config = {.pin_bit_mask = 1ULL << power_pin, .mode = GPIO_MODE_OUTPUT};
+    (void)gpio_hold_dis(power_pin);
+    esp_err_t err = gpio_config(&config);
+    if (err == ESP_OK) err = gpio_set_level(power_pin, !active_level);
+    if (err != ESP_OK) return err;
+    sdmmc_power_pin = power_pin;
+    sdmmc_power_active_level = active_level;
+    return ESP_OK;
+#else
+    (void)power_pin; (void)active_level;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
 esp_err_t sd_card_clear_sdmmc_config(void)
 {
 #if SOLAR_OS_PACKAGE_EXPANSION_SDMMC && !SOLAR_OS_BOARD_STORAGE_SDSPI
@@ -414,6 +440,10 @@ esp_err_t sd_card_clear_sdmmc_config(void)
     }
     for (size_t i = 0; i < 6; i++) {
         sdmmc_pins[i] = -1;
+    }
+    if (sdmmc_power_pin >= 0) {
+        (void)gpio_set_level(sdmmc_power_pin, !sdmmc_power_active_level);
+        sdmmc_power_pin = -1;
     }
     transport = SD_CARD_TRANSPORT_NONE;
     return ESP_OK;
@@ -578,32 +608,32 @@ static sd_card_mount_t *find_mount_by_target(const char *target)
 
 static sd_card_mount_t *alloc_mount(uint8_t *logical_volume)
 {
-    const uint8_t flash_volume = flash_storage_logical_volume();
-
-    for (uint8_t vol = 0; vol < SD_CARD_MAX_MOUNTS; vol++) {
-        if (vol == flash_volume) {
-            continue;
-        }
-
-        bool used = false;
-        for (size_t i = 0; i < SD_CARD_MAX_MOUNTS; i++) {
-            if (mounts[i].active && mounts[i].logical_volume == vol) {
-                used = true;
-                break;
-            }
-        }
-        if (used) {
-            continue;
-        }
-        for (size_t i = 0; i < SD_CARD_MAX_MOUNTS; i++) {
-            if (!mounts[i].active) {
-                *logical_volume = vol;
-                return &mounts[i];
-            }
+    /* Reserve extra logical volumes in diskio too, so flash and file-backed
+     * disks cannot reuse the number of a second SD partition. */
+    BYTE vol = physical_pdrv;
+    for (size_t i = 0; i < SD_CARD_MAX_MOUNTS; ++i) {
+        if (mounts[i].active && mounts[i].logical_volume == physical_pdrv) {
+            if (ff_diskio_get_drive(&vol) != ESP_OK) return NULL;
+            break;
         }
     }
+    for (size_t i = 0; i < SD_CARD_MAX_MOUNTS; ++i)
+        if (!mounts[i].active) { *logical_volume = vol; return &mounts[i]; }
     return NULL;
 }
+
+static DSTATUS sd_partition_init(BYTE drive) { (void)drive; return ff_disk_initialize(physical_pdrv); }
+static DSTATUS sd_partition_status(BYTE drive) { (void)drive; return ff_disk_status(physical_pdrv); }
+static DRESULT sd_partition_read(BYTE drive, BYTE *data, DWORD sector, UINT count)
+{ (void)drive; return ff_disk_read(physical_pdrv, data, sector, count); }
+static DRESULT sd_partition_write(BYTE drive, const BYTE *data, DWORD sector, UINT count)
+{ (void)drive; return ff_disk_write(physical_pdrv, data, sector, count); }
+static DRESULT sd_partition_ioctl(BYTE drive, BYTE command, void *data)
+{ (void)drive; return ff_disk_ioctl(physical_pdrv, command, data); }
+static const ff_diskio_impl_t sd_partition_diskio = {
+    .init = sd_partition_init, .status = sd_partition_status,
+    .read = sd_partition_read, .write = sd_partition_write, .ioctl = sd_partition_ioctl,
+};
 
 static void update_block_mount_state(void)
 {
@@ -813,12 +843,20 @@ static esp_err_t ensure_card_ready(void)
         sdspi_device_config_t device_config;
         sd_card_make_spi_config(&device_config);
 
-        ret = host.init();
-        if (ret != ESP_OK) {
-            diagnostics_init_error = ret;
-            sd_card_deinit_host();
-            set_mount_error_status(ret);
-            return ret;
+        /* Runtime SDSPI devices arrive through an acquired routed SPI bus,
+         * which has already initialized the host. Board-native SDSPI remains
+         * responsible for initializing its legacy spi_bus wrapper here. */
+#if SOLAR_OS_PACKAGE_EXPANSION_SDSPI
+        if (transport != SD_CARD_TRANSPORT_SDSPI_RUNTIME)
+#endif
+        {
+            ret = host.init();
+            if (ret != ESP_OK) {
+                diagnostics_init_error = ret;
+                sd_card_deinit_host();
+                set_mount_error_status(ret);
+                return ret;
+            }
         }
 
         sdspi_dev_handle_t sdspi_handle = -1;
@@ -835,6 +873,17 @@ static esp_err_t ensure_card_ready(void)
 #endif
 #if SOLAR_OS_PACKAGE_EXPANSION_SDMMC
     if (transport == SD_CARD_TRANSPORT_SDMMC) {
+        if (sdmmc_power_pin >= 0) {
+            ret = gpio_set_level(sdmmc_power_pin, !sdmmc_power_active_level);
+            vTaskDelay(pdMS_TO_TICKS(80));
+            if (ret == ESP_OK) ret = gpio_set_level(sdmmc_power_pin, sdmmc_power_active_level);
+            vTaskDelay(pdMS_TO_TICKS(120));
+            if (ret != ESP_OK) {
+                diagnostics_init_error = ret;
+                set_mount_error_status(ret);
+                return ret;
+            }
+        }
         host = (sdmmc_host_t)SDMMC_HOST_DEFAULT();
         sdmmc_slot_config_t slot_config;
         sd_card_make_slot_config(&slot_config);
@@ -917,6 +966,7 @@ static esp_err_t unmount_one(sd_card_mount_t *mount)
 
     mount->active = false;
     mount->fs = NULL;
+    if (mount->logical_volume != physical_pdrv) ff_diskio_unregister(mount->logical_volume);
     update_block_mount_state();
     return err;
 }
@@ -1022,10 +1072,14 @@ esp_err_t sd_card_mount_volume(const char *name, const char *mount_point)
         return ret;
     }
 
+    if (logical_volume != physical_pdrv) ff_diskio_register(logical_volume, &sd_partition_diskio);
+
     FRESULT fresult = f_mount(fs, drv, 1);
     if (fresult != FR_OK) {
         diagnostics_fresult = fresult;
+        (void)f_mount(NULL, drv, 0);
         esp_vfs_fat_unregister_path(mount_point);
+        if (logical_volume != physical_pdrv) ff_diskio_unregister(logical_volume);
         return ESP_FAIL;
     }
 
@@ -1081,6 +1135,21 @@ esp_err_t sd_card_unmount_volume(const char *target)
     }
     deinit_card_if_unused();
     return ret;
+}
+
+esp_err_t sd_card_prepare_shutdown(void)
+{
+    if (sd_card_has_active_mounts()) return ESP_ERR_INVALID_STATE;
+#if SOLAR_OS_PACKAGE_EXPANSION_SDMMC && !SOLAR_OS_BOARD_STORAGE_SDSPI
+    if (sdmmc_power_pin >= 0) {
+        const esp_err_t err = gpio_set_level(sdmmc_power_pin, !sdmmc_power_active_level);
+        if (err != ESP_OK) return err;
+        const esp_err_t hold_err = gpio_hold_en(sdmmc_power_pin);
+        if (hold_err != ESP_OK) return hold_err;
+        gpio_deep_sleep_hold_en();
+    }
+#endif
+    return ESP_OK;
 }
 
 esp_err_t sd_card_unmount(void)
@@ -1140,6 +1209,7 @@ esp_err_t sd_card_format(const char *name)
 #endif
 
     char drive[3] = {(char)('0' + logical_volume), ':', 0};
+    if (logical_volume != physical_pdrv) ff_diskio_register(logical_volume, &sd_partition_diskio);
     const size_t work_size = 4096U;
     void *work = heap_caps_malloc(work_size,
                                   MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -1159,6 +1229,7 @@ esp_err_t sd_card_format(const char *name)
         heap_caps_free(work);
     }
 
+    if (logical_volume != physical_pdrv) ff_diskio_unregister(logical_volume);
     deinit_card_if_unused();
     if (ret == ESP_OK) {
         snprintf(status_text, sizeof(status_text), "formatted %s", name);

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 import shutil
 import sys
@@ -17,6 +18,8 @@ if str(script_dir) not in sys.path:
 
 from solaros_build_lock import acquire_project_build_lock
 from solaros_update_layout import select_layout
+from solaros_keymap import PROFILE_DIR, load_profile, merge, read_json
+from solaros_keymap_build import OPTIONS, dependencies, resolve_selection
 
 
 def _selected_flavor() -> str:
@@ -64,10 +67,10 @@ def _selected_vga_mode() -> str:
 def _append_cmake_arg(arg: str) -> None:
     board_config = env.BoardConfig()
     current = board_config.get("build.cmake_extra_args", "") or ""
-    args = current.split()
+    args = shlex.split(current)
     if arg not in args:
         args.append(arg)
-    board_config.update("build.cmake_extra_args", " ".join(args))
+    board_config.update("build.cmake_extra_args", shlex.join(args))
 
 
 def _remove_path(path: Path) -> None:
@@ -78,10 +81,41 @@ def _remove_path(path: Path) -> None:
 
 
 build_dir = Path(env.subst("$BUILD_DIR"))
+# PlatformIO preprocesses memory.ld.in in two stages without tracking its
+# sdkconfig.h include. Memory-layout changes must invalidate both stages.
+env.Depends("$BUILD_DIR/esp-idf/esp_system/ld/memory.ld.in", "$BUILD_DIR/config/sdkconfig.h")
+env.Depends("$BUILD_DIR/memory.ld", "$BUILD_DIR/config/sdkconfig.h")
 flavor = _selected_flavor()
 flavor_name_override = os.environ.get("SOLAR_OS_FLAVOR_NAME_OVERRIDE", "")
+module_repository_url = os.environ.get("SOLAR_OS_MODULE_REPOSITORY_URL", "")
+_append_cmake_arg("-DSOLAR_OS_MODULE_REPOSITORY_URL=" + module_repository_url)
 board = _selected_board()
 board_config = env.BoardConfig()
+# Resolve keymap paths before IDF's component-discovery subprocesses.
+cmake_options = {}
+for arg in shlex.split(board_config.get("build.cmake_extra_args", "") or ""):
+    if arg.startswith("-D") and "=" in arg:
+        name, value = arg[2:].split("=", 1)
+        cmake_options[name.split(":", 1)[0]] = value
+keymap_options = {
+    name: (os.environ.get(name) or env.GetProjectOption(
+        "custom_solaros_" + name.removeprefix("SOLAR_OS_").lower(), "") or cmake_options.get(name, ""))
+    for name in OPTIONS
+}
+try:
+    selected_keymaps = resolve_selection(project_dir, *keymap_options.values())
+    keymap_inputs = dependencies(project_dir, *keymap_options.values())
+    for name, path in selected_keymaps.items():
+        merge(load_profile(name), read_json(path))
+except (OSError, ValueError) as exc:
+    raise SystemExit(f"SolarOS keymap: {exc}") from exc
+for name in ("SOLAR_OS_KEYMAP_FILE", "SOLAR_OS_KEYMAPS_FILE"):
+    if keymap_options[name]:
+        path = Path(keymap_options[name])
+        keymap_options[name] = (project_dir / path if not path.is_absolute() else path).resolve().as_posix()
+for name, value in keymap_options.items():
+    os.environ[name] = value
+    _append_cmake_arg(f"-D{name}={value}")
 configured_partition = str(board_config.get("build.partitions", "partitions.csv"))
 try:
     update_layout = select_layout(
@@ -160,9 +194,14 @@ tracked_files = (
     project_dir / "packages" / "solar_os_packages.toml",
     project_dir / "scripts" / "generate_flavor_config.py",
     project_dir / "scripts" / "platformio_solaros_flavor.py",
+    project_dir / "scripts" / "cxx_sdkconfig.cmake",
     project_dir / "scripts" / "solaros_update_layout.py",
     project_dir / "scripts" / "solaros_build_lock.py",
+    project_dir / "scripts" / "generate_keymaps.py",
+    project_dir / "scripts" / "solaros_keymap.py",
+    project_dir / "scripts" / "solaros_keymap_build.py",
     project_dir / "patches" / "nimble" / "required_config.txt",
+    project_dir / "patches" / "nimble" / "config_guard.cmake",
     project_dir / "scripts" / "validate_board_metadata.py",
     project_dir / "scripts" / "generate_board_profile.py",
     project_dir / "scripts" / "solaros_board_manifest.py",
@@ -172,17 +211,21 @@ tracked_files = (
     project_dir / "include" / "solar_os_board.h",
     project_dir / "doc" / "manual" / "boards.md",
     project_dir / "doc" / "manual" / "expansion.reference.md",
-) + board_files + board_manifest_files + board_headers + sdkconfig_default_files + partition_files
+) + board_files + board_manifest_files + board_headers + sdkconfig_default_files + partition_files \
+    + tuple(sorted(PROFILE_DIR.glob("*.json"))) + keymap_inputs
 stamp = (
     f"board={board}\n"
     f"flavor={flavor}\n"
     f"flavor_name_override={flavor_name_override}\n"
+    f"module_repository_url={module_repository_url}\n"
     f"flavor_file={flavor_file}\n"
     f"layout={layout}\n"
     f"partition={partition_file}\n"
     f"cvbs={cvbs_mode}\n"
     f"vga={vga_mode}\n"
 )
+for name, value in keymap_options.items():
+    stamp += f"{name}={value}\n"
 for tracked_file in tracked_files:
     stat = tracked_file.stat()
     try:
