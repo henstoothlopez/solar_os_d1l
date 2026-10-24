@@ -3305,3 +3305,21 @@ sources = [
 ]
 requires = ["esp_driver_gpio"]
 capabilities = ["gfx", "expansion_gpio"]
+
+# NEW 2026-10-23: D1L keyboard (CardKB2 via RP2040 UART bridge).
+# Reuses the upstream CardKB key decoder, so it depends on expansion_cardkb.
+[groups.d1l_keys]
+label = "D1L keyboard via RP2040 UART bridge"
+category = "Expansion hardware"
+members = ["driver_d1l_keys"]
+
+[packages.driver_d1l_keys]
+label = "driver.d1l-keys"
+targets = ["esp32s3"]
+expansion_drivers = ["solar_os_d1l_keys_expansion_driver"]
+depends = ["service_expansion", "expansion_cardkb"]
+sources = [
+  "services/solar_os_d1l_keys.c",
+  "services/solar_os_d1l_keys_driver.c",
+]
+requires = ["esp_driver_uart"]

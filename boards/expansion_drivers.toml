@@ -2207,6 +2207,17 @@ kind = "parameter"
 hint = "0..3"
 allowed = [0, 1, 2, 3]
 
+# NEW 2026-10-23: D1L keyboard. The CardKB2 on the Grove port is wired to the
+# RP2040, so SolarOS polls it with the "keys" command over UART1
+# (GPIO19 TX / GPIO20 RX). No bindings: the pins are fixed by the board.
+[drivers.d1l-keys]
+keyboard = true
+summary = "CardKB keyboard via RP2040 UART bridge (D1L)"
+package = "driver_d1l_keys"
+targets = ["esp32s3"]
+capabilities = []
+default_name = "keyboard0"
+
 [drivers.sx1262]
 summary = "SX1262 LoRa/(G)FSK radio"
 package = "sx1262"

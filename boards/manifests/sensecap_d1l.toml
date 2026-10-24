@@ -142,6 +142,12 @@ driver = "ft6336-d1l"
 name = "touch0"
 bindings = { i2c = "i2c0", addr = 0x48, addr_fallback = 0x38, rotation = 2 }
 
+# NEW 2026-10-23: keyboard via the RP2040 (UART1, GPIO19/GPIO20).
+[[devices]]
+driver = "d1l-keys"
+name = "keyboard0"
+bindings = {}
+
 [[pins]]
 gpio = 16
 policy = "fixed"
