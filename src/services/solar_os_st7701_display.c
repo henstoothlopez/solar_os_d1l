@@ -714,6 +714,9 @@ esp_err_t solar_os_st7701_attach(const char *name,
         free(dev);
         return ESP_ERR_NO_MEM;
     }
+    /* 2026-10-25: zero the tile buffer. heap_caps_malloc() does not clear
+     * memory, so the first frame could contain leftover garbage. */
+    memset(dev->tile_buffer, 0, dev->tile_buffer_size);
     dev->fg_rgb565 = 0xFFFF;
     dev->bg_rgb565 = 0x0000;
 

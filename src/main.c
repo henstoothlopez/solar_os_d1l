@@ -2164,6 +2164,12 @@ void app_main(void)
     update_status();
     ESP_LOGI(TAG, "boot milestone: status ready");
 
+    /* 2026-10-25: wipe splash leftovers before the terminal takes over, so
+     * stale pixels outside the terminal's own repaint area cannot survive
+     * (first-boot glitch: strip split top/bottom, cured by `clear`). */
+    if (display_u8g2 != NULL) {
+        solar_os_splash_clear(&gfx);
+    }
     if (terminal != NULL) {
         const bool shell_started = solar_os_sessions_switch_to_app(solar_os_shell_app());
         ESP_LOGI(TAG, "boot milestone: shell switch=%s", shell_started ? "ok" : "failed");

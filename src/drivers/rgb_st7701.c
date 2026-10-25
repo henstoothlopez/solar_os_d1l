@@ -152,7 +152,7 @@ esp_err_t rgb_st7701_init(const rgb_st7701_config_t *config, rgb_st7701_t **out_
         .data_width = 16,
         .bits_per_pixel = 16,
         .num_fbs = 1, /* TUNE ON HARDWARE: 2 for double-buffering if tearing shows up */
-        .bounce_buffer_size_px = 0, /* TUNE ON HARDWARE: nonzero bounce buffer
+        .bounce_buffer_size_px = 4800, /* CHANGED 2026-10-24: 10 rows of 480 px; fixes right-drift on redraw. Original note follows: */ /* TUNE ON HARDWARE: nonzero bounce buffer
                                         may be needed depending on PSRAM
                                         bandwidth headroom at this
                                         resolution/refresh rate */
